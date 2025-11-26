@@ -45,6 +45,28 @@ def test_init_defaults_geotiff_warning(temp_dir):
     assert task.embed_file_key == "filename"
     assert _has_warning(caught, "GeoTIFF selected; 2D token embeddings")
 
+def test_init_unsupported_output_format_raises(temp_dir):
+    with pytest.raises(ValueError, match="Unsupported output format"):
+        EmbeddingGenerationTask(
+            model="dummy",
+            output_dir=temp_dir,
+            output_format="npy",  # unsupported
+        )
+
+def test_init_pooling_parquet_only_has_cls_warning(temp_dir):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        task = EmbeddingGenerationTask(
+            model="dummy",
+            output_dir=temp_dir,
+            output_format="tiff",
+            has_cls=None,
+            embedding_pooling="vit_mean",
+        )
+
+    assert task.output_format == "tiff"
+    msgs = [str(w.message) for w in caught]
+    assert any("No 'has_cls' provided; assuming CLS" in m for m in msgs)
 
 def test_init_pooling_warnings(temp_dir):
     with warnings.catch_warnings(record=True) as caught:
@@ -200,6 +222,36 @@ def test_pool_embedding_vit_cls_error_without_cls():
     with pytest.raises(ValueError, match="Cannot use 'vit_cls' pooling"):
         task.pool_embedding(emb, "vit_cls", has_cls=False)
 
+def test_pool_embedding_vit_mean_and_cls_logic(temp_dir):
+    task = EmbeddingGenerationTask(
+        model="dummy",
+        output_dir=temp_dir,
+        output_format="tiff",
+    )
+
+    # 5 tokens (incl. CLS) x 4 dims
+    emb = torch.stack([
+        torch.zeros(4),        # CLS
+        torch.ones(4),         # token 1
+        2 * torch.ones(4),     # token 2
+        3 * torch.ones(4),     # token 3
+        4 * torch.ones(4),     # token 4
+    ], dim=0)
+
+    # CLS pooling: take first token
+    cls_vec = task.pool_embedding(emb, pooling="vit_cls", has_cls=True)
+    assert cls_vec.shape == (4,)
+    assert torch.allclose(cls_vec, torch.zeros(4))
+
+    # mean pooling with CLS: should drop CLS and average remaining tokens
+    mean_vec = task.pool_embedding(emb, pooling="vit_mean", has_cls=True)
+    assert mean_vec.shape == (4,)
+    assert torch.allclose(mean_vec, 2.5 * torch.ones(4))
+
+    # mean pooling without CLS: use all tokens
+    mean_no_cls = task.pool_embedding(emb, pooling="vit_mean", has_cls=False)
+    assert torch.allclose(mean_no_cls, 2.0 * torch.ones(4))
+
 
 def test_write_tiff_1d_and_2d_and_3d(temp_dir):
     task = EmbeddingGenerationTask(model="dummy", output_dir=temp_dir)
@@ -323,6 +375,84 @@ def test_predict_step_missing_filename_raises(temp_dir):
     }
     with pytest.raises(KeyError, match="not found in input dictionary"):
         task.predict_step(batch)
+def test_write_batch_temporal_and_non_temporal_tiff(temp_dir, monkeypatch):
+    task = EmbeddingGenerationTask(
+        model="dummy",
+        output_dir=temp_dir,
+        output_format="tiff",
+    )
+
+    calls = []
+
+    def fake_write_tiff(emb, filename, meta, dir_path):
+        calls.append((filename, meta))
+
+    monkeypatch.setattr(task, "write_tiff", fake_write_tiff)
+
+    emb_t = torch.randn(2, 2, 1, 1, 1)
+    file_ids_t = [["f00.tif", "f01.tif"], ["f10.tif", "f11.tif"]]
+    meta_t = {"time": np.arange(4).reshape(2, 2)}
+
+    task.write_batch(emb_t, file_ids_t, meta_t, Path(temp_dir))
+
+    assert len(calls) == 4
+    f, m = calls[1]
+    assert f == "f01.tif"
+    assert m["time"] == 1
+
+    calls.clear()
+    emb_b = torch.randn(2, 1, 1, 1)
+    file_ids_b = ["g0.tif", "g1.tif"]
+    meta_b = {"time": np.array([10, 11])}
+
+    task.write_batch(emb_b, file_ids_b, meta_b, Path(temp_dir))
+
+    assert len(calls) == 2
+    f, m = calls[0]
+    assert f == "g0.tif"
+    assert m["time"] == 10
+
+def test_write_tiff_drops_cls_and_reshapes(temp_dir, monkeypatch):
+    task = EmbeddingGenerationTask(
+        model="dummy",
+        output_dir=temp_dir,
+        output_format="tiff",
+        has_cls=True,
+    )
+
+    recorded = {}
+
+    class DummyDst:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            pass
+
+        def write(self, arr):
+            recorded["arr_shape"] = arr.shape
+
+        def update_tags(self, **tags):
+            recorded["tags"] = tags
+
+    def fake_open(*args, **kwargs):
+        return DummyDst()
+
+    monkeypatch.setattr(
+        "terratorch.tasks.embedding_generation.rasterio.open",
+        fake_open,
+    )
+
+    # 5 tokens, dim=4 -> drop CLS -> 4 tokens -> 2x2 grid
+    emb = torch.randn(5, 4)
+    task.write_tiff(
+        embedding=emb,
+        filename="foo.tif",
+        metadata={"id": np.array([1])},
+        dir_path=Path(temp_dir),
+    )
+
+    assert recorded["arr_shape"] == (4, 2, 2)
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v', '--tb=short'])
