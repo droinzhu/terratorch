@@ -23,7 +23,10 @@ all_tests=$(cd "$TEST_DIR" && \
 
 echo "$all_tests"
 
-for test in $all_tests; do
+while IFS= read -r test; do
+    # Skip empty lines
+    [[ -z "$test" ]] && continue
+    
     # Normalize name (pytest nodeid may include "::class::test_func")
     test_name=$(echo "$test" | tr '/:' '_')
     out="$LOG_DIR/${test_name}.out"
@@ -38,7 +41,7 @@ for test in $all_tests; do
          -oo "$out" -eo "$err" \
          "cd $TEST_DIR && \
           source $VENV_PATH/bin/activate && \
-          pytest -s -v $test"
-done
+          pytest -s -v \"$test\""
+done <<< "$all_tests"
 
 echo "All jobs submitted. Monitor with: bjobs -u \$USER"
