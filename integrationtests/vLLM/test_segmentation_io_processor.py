@@ -139,6 +139,10 @@ def test_serving_segmentation_plugin(get_server, model_name, input_name):
                 
                 name_without_ext, ext = os.path.splitext(source_filename)
                 
+                # For TerraMind models, remove _DEM suffix from expected pattern
+                if isinstance(image_url, dict) and name_without_ext.endswith("_DEM"):
+                    name_without_ext = name_without_ext[:-4]  # Remove _DEM
+                
                 # Check that the output filename is based on the input filename
                 expected_pattern = f"{name_without_ext}_pred"
                 assert expected_pattern in base_filename, \
