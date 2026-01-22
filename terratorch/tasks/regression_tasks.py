@@ -356,20 +356,18 @@ class PixelwiseRegressionTask(TerraTorchTask):
         """
         loss = self.hparams["loss"]
         ignore_index = self.hparams["ignore_index"]
-        custom_loss = self.hparams["custom_loss"]
-        custom_loss_kwargs = self.hparams["custom_loss_kwargs"]
 
         if isinstance(loss, str):
             # Single loss
             self.criterion = init_loss(
-                loss, ignore_index=ignore_index, custom_loss=custom_loss, custom_loss_kwargs=custom_loss_kwargs
+                loss, ignore_index=ignore_index,
             )
         elif isinstance(loss, nn.Module):
             # Custom loss
             self.criterion = loss
         elif isinstance(loss, list):
             # List of losses with equal weights
-            losses = {loss: init_loss(loss, ignore_index=ignore_index, custom_loss=custom_loss) for loss in loss}
+            losses = {loss: init_loss(loss, ignore_index=ignore_index) for loss in loss}
             self.criterion = CombinedLoss(losses=losses)
         elif isinstance(loss, dict):
             # Equal weighting of losses
