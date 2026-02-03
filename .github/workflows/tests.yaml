@@ -1,0 +1,57 @@
+name: terratorch tuning toolkit
+
+on: 
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'tests/resources/**'
+      - 'examples/**/*'
+      - '**/*.svg'
+      - '**/*.png'
+      - '**/*.txt'
+      - '**/*.ipynb'
+      - 'integrationtests/**/*'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'tests/resources/**'
+      - 'examples/**/*'
+      - '**/*.svg'
+      - '**/*.png'
+      - '**/*.txt'
+      - '**/*.ipynb'
+      - 'integrationtests/**/*'
+jobs:
+  build:
+    environment: cicd
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+    env:
+      R_TESTS_VERBOSE: 2
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v5
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          pip install pip==25.1
+          pip --version
+          pip install -e .[test]
+      - name: List pip dependencies
+        run: pip list
+      - name: Test with pytest
+        run: |
+          pytest -s -v tests

@@ -47,10 +47,10 @@ class CarbonFluxNonGeoDataModule(NonGeoDataModule):
         batch_size: int = 4,
         num_workers: int = 0,
         bands: Sequence[str] = CarbonFluxNonGeo.all_band_names,
-        train_transform: A.Compose | None | list[A.BasicTransform] = None,
-        val_transform: A.Compose | None | list[A.BasicTransform] = None,
-        test_transform: A.Compose | None | list[A.BasicTransform] = None,
-        predict_transform: A.Compose | None | list[A.BasicTransform] = None,
+        train_transform: A.Compose | None | list = None,
+        val_transform: A.Compose | None | list = None,
+        test_transform: A.Compose | None | list = None,
+        predict_transform: A.Compose | None | list = None,
         aug: AugmentationSequential = None,
         no_data_replace: float | None = 0.0001,
         use_metadata: bool = False,
@@ -64,10 +64,10 @@ class CarbonFluxNonGeoDataModule(NonGeoDataModule):
             batch_size (int, optional): Batch size for DataLoaders. Defaults to 4.
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             bands (Sequence[str], optional): List of bands to use. Defaults to CarbonFluxNonGeo.all_band_names.
-            train_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for training data.
-            val_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for validation data.
-            test_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for testing data.
-            predict_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for prediction data.
+            train_transform (A.Compose | None | list, optional): Transformations for training data.
+            val_transform (A.Compose | None | list, optional): Transformations for validation data.
+            test_transform (A.Compose | None | list, optional): Transformations for testing data.
+            predict_transform (A.Compose | None | list, optional): Transformations for prediction data.
             aug (AugmentationSequential, optional): Augmentation sequence; if None, applies multimodal normalization.
             no_data_replace (float | None, optional): Value to replace missing data. Defaults to 0.0001.
             use_metadata (bool): Whether to return metadata info.

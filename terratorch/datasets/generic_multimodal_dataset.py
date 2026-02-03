@@ -1,7 +1,6 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
+# Copyright contributors to the Terratorch project
 
-"""Module containing generic dataset classes"""
+"""Module containing generic multimodal dataset classes"""
 
 import glob
 import logging
@@ -10,13 +9,13 @@ import warnings
 import os
 import re
 import torch
+import rasterio
 import pandas as pd
 from abc import ABC
 from pathlib import Path
 from typing import Any
 
 import albumentations as A
-import matplotlib as mpl
 import numpy as np
 import rioxarray
 import xarray as xr
@@ -24,10 +23,11 @@ from einops import rearrange
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+from matplotlib.colors import ListedColormap
 from torchgeo.datasets import NonGeoDataset
 
-from terratorch.datasets.utils import HLSBands, default_transform, filter_valid_files, generate_bands_intervals
-from terratorch.datasets.transforms import MultimodalTransforms
+from terratorch.datasets.utils import default_transform, generate_bands_intervals
+from terratorch.datasets.transforms import MultimodalTransforms, MultimodalToTensor
 
 logger = logging.getLogger("terratorch")
 
@@ -43,31 +43,10 @@ def load_table_data(file_path: str | Path) -> pd.DataFrame:
     return df
 
 
-class MultimodalToTensor:
-    def __init__(self, modalities):
-        self.modalities = modalities
-
-    def __call__(self, d):
-        new_dict = {}
-        for k, v in d.items():
-            if not isinstance(v, np.ndarray):
-                new_dict[k] = v
-            else:
-                if k in self.modalities and len(v.shape) >= 3:  # Assuming raster modalities with 3+ dimensions
-                    if len(v.shape) <= 4:
-                        v = np.moveaxis(v, -1, 0)  # C, H, W or C, T, H, W
-                    elif len(v.shape) == 5:
-                        v = np.moveaxis(v, -1, 1)  # B, C, T, H, W
-                    else:
-                        raise ValueError(f"Unexpected shape for {k}: {v.shape}")
-                new_dict[k] = torch.from_numpy(v)
-        return new_dict
-
-
 class GenericMultimodalDataset(NonGeoDataset, ABC):
     """
-    This is a generic dataset class to be used for instantiating datasets from arguments.
-    Ideally, one would create a dataset class specific to a dataset.
+    This is a generic dataset class initialized by
+    [GenericMultiModalDataModule][terratorch.datamodules.GenericMultiModalDataModule].
     """
 
     def __init__(
@@ -78,10 +57,10 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
         label_grep: str | None = "*",
         split: Path | None = None,
         image_modalities: list[str] | None = None,
-        rgb_modality: str | None = None,
-        rgb_indices: list[int] | None = None,
+        rgb_indices: dict[str, list[int]] | None = None,
         allow_missing_modalities: bool = False,
         allow_substring_file_names: bool = True,
+        skip_file_checks: bool = False,
         dataset_bands: dict[str, list] | None = None,
         output_bands: dict[str, list] | None = None,
         constant_scale: dict[str, float] = None,
@@ -89,6 +68,7 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
         no_data_replace: float | None = None,
         no_label_replace: float | None = -1,
         expand_temporal_dimension: bool = False,
+        temporal_channel_major: bool = False,
         reduce_zero_label: bool = False,
         channel_position: int = -3,
         scalar_label: bool = False,
@@ -116,35 +96,36 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
             image_modalities(list[str], optional): List of pixel-level raster modalities. Defaults to data_root.keys().
                 The difference between all modalities and image_modalities are non-image modalities which are treated
                 differently during the transforms and are not modified but only converted into a tensor if possible.
-            rgb_modality (str, optional): Modality used for RGB plots. Defaults to first modality in data_root.keys().
-            rgb_indices (list[str], optional): Indices of RGB channels. Defaults to [0, 1, 2].
+            rgb_indices (dict[str, list[int]], optional): Indices of RGB channels for plotting with the format
+                {<modality>: [<band indices>]}. Defaults to {image_modalities[0]: [0, 1, 2]} if not provided.
             allow_missing_modalities (bool, optional): Allow missing modalities during data loading. Defaults to False.
-            allow_substring_file_names (bool, optional): Allow substrings during sample identification by adding
-                image or label grep to the sample prefixes. If False, treats sample prefixes as full file names.
-                If True and no split file is provided, considers the file stem as prefix, otherwise the full file name.
-                Defaults to True.
+            allow_substring_file_names (bool, optional): Allow substrings during sample identification using
+                wildcards (*). If False, treats sample prefix + image_grep as full file name. Defaults to True.
             dataset_bands (dict[list], optional): Bands present in the dataset, provided in a dictionary with modalities
                 as keys. This parameter names input channels (bands) using HLSBands, ints, int ranges, or strings, so
                 that they can then be referred to by output_bands. Needs to be superset of output_bands. Can be a subset
                 of all modalities. Defaults to None.
             output_bands (dict[list], optional): Bands that should be output by the dataset as named by dataset_bands,
                 provided as a dictionary with modality keys. Can be subset of all modalities. Defaults to None.
-            constant_scale (dict[float]): Factor to multiply data values by, provided as a dictionary with modalities as
-                keys. Can be subset of all modalities. Defaults to None.
+            constant_scale (dict[str, float]): Factor to multiply data values by, provided as a dictionary with
+                modalities as keys. Can be subset of all modalities. Defaults to None.
             transform (Albumentations.Compose | dict | None): Albumentations transform to be applied to all image
                 modalities (transformation are shared between image modalities, e.g., similar crop or rotation).
-                Should end with ToTensorV2(). If used through the generic_data_module, should not include normalization.
-                Not supported for multi-temporal data. The transform is not applied to non-image data, which is only
-                converted to tensors if possible. If dict, can include multiple transforms per modality which are
-                applied separately (no shared parameters between modalities).
-                Defaults to None, which simply applies ToTensorV2().
+                Should end with albumentations.ToTensorV2(). If used through the generic_data_module, should not include
+                normalization. The transform is not applied to non-image data, which is only converted to tensors if
+                possible. If dict with modalities as keys, transforms are applied seperatly per modality without shared
+                parameters. Defaults to terratorch.datasets.transforms.MultimodalToTensor().
             no_data_replace (float | None): Replace nan values in input data with this value.
                 If None, does no replacement. Defaults to None.
             no_label_replace (float | None): Replace nan values in label with this value.
                 If none, does no replacement. Defaults to -1.
+            skip_file_checks (bool, optional): Skips the check if a sample path exists. Only works
+                with allow_missing_modalities=False and allow_substring_file_names=False. Samples are expected in the
+                format <prefix><image_grep> without any wildcards (*), e.g. sample1_s2l2a.tif. Defaults to False.
             expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
                 Only works with image modalities. Is only applied to modalities with defined dataset_bands.
-                Defaults to False.
+                Defaults to False. Assumes bands are grouped by time (all bands of one timestep are stacked together), otherwise set temporal_channel_major=True.
+            temporal_channel_major: Used for expand_temporal_dimension, set True if bands are grouped by channel (all timesteps of one band are stacked together).
             reduce_zero_label (bool): Subtract 1 from all labels. Useful when labels start from 1 instead of the
                 expected 0. Defaults to False.
             channel_position (int): Position of the channel dimension in the image modalities. Defaults to -3.
@@ -171,6 +152,7 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
         self.no_label_replace = no_label_replace
         self.reduce_zero_label = reduce_zero_label
         self.expand_temporal_dimension = expand_temporal_dimension
+        self.temporal_channel_major = temporal_channel_major
         self.channel_position = channel_position
         self.scalar_label = scalar_label
         self.data_with_sample_dim = data_with_sample_dim
@@ -183,9 +165,19 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
             not self.concat_bands or not allow_missing_modalities
         ), "concat_bands cannot be used with allow_missing_modalities."
 
-        if self.expand_temporal_dimension and dataset_bands is None:
-            msg = "Please provide dataset_bands when expand_temporal_dimension is True"
-            raise Exception(msg)
+        if self.expand_temporal_dimension:
+            if not self.temporal_channel_major:
+                warnings.warn(
+                    "expand_temporal_dimension=True assumes bands are grouped by time "
+                    "(all bands of one timestep are stacked together). "
+                    "If instead bands are grouped by channel "
+                    "(all timesteps of one band are stacked together), "
+                    "set temporal_channel_major=True.")
+
+            if dataset_bands is None:
+                raise ValueError(
+                    "Please provide dataset_bands when expand_temporal_dimension=True."
+                )
 
         if scalar_label:
             self.non_image_modalities += ["label"]
@@ -206,14 +198,15 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
         else:
             image_files = {}
             for m, m_paths in data_root.items():
-                image_files[m] = sorted(glob.glob(os.path.join(m_paths, image_grep[m])))
+                image_files[m] = sorted(glob.glob(os.path.join(m_paths, '*' + image_grep[m])))
+                if len(image_files[m]) > 10_000:
+                    warnings.warn("Found large data folder, consider providing split files to speed up dataset build.")
 
             def get_file_id(file_name, mod):
-                glob_as_regex = '^' + ''.join('(.*?)' if ch == '*' else re.escape(ch)
-                                              for ch in image_grep[mod]) + '$'
+                glob_as_regex = '^(.*?)' + ''.join(re.escape(ch)for ch in image_grep[mod].strip('*')) + '$'
                 stem = re.match(glob_as_regex, os.path.basename(file_name)).group(1)
-                if allow_substring_file_names:
-                    # Remove file extensions
+                if "." not in image_grep[mod] and allow_substring_file_names:
+                    # Remove file extensions if no extension in image_grep
                     stem = os.path.splitext(stem)[0]
                 return stem
 
@@ -264,7 +257,16 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
                     sample[m] = m_path.loc[file].values
                 elif allow_substring_file_names:
                     # Substring match with image_grep
-                    m_files = sorted(glob.glob(os.path.join(m_path, file + image_grep[m])))
+                    if os.path.exists(os.path.join(m_path, file + image_grep[m].strip('*'))):
+                        # Avoid glob if possible to speed up the dataset build
+                        m_files = [os.path.join(m_path, file + image_grep[m].strip('*'))]
+                    else:
+                        m_files = sorted(glob.glob(os.path.join(m_path, file + image_grep[m])))
+                        if len(valid_files) > 10_000:
+                            warnings.warn("Found large data folder. You can speed up the dataset build by "
+                                          "providing split files with sample ids and suffixes without wildcards. E.g. "
+                                          "sample id 'sample1' and suffix '_s2l2a.tif' for file 'sample1_s2l2a.tif'.")
+
                     if m_files:
                         sample[m] = m_files[-1]
                         if len(m_files) > 1:
@@ -273,8 +275,8 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
                                           f"Consider changing data structure or parameters for unique selection.")
                 else:
                     # Exact match
-                    file_path = os.path.join(m_path, file)
-                    if os.path.exists(file_path):
+                    file_path = os.path.join(m_path, file + image_grep[m].strip('*'))
+                    if skip_file_checks or os.path.exists(file_path):
                         sample[m] = file_path
 
             if label_data_root is not None:
@@ -282,14 +284,18 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
                     # Add tabular data to sample
                     sample["mask"] = label_data_root.loc[file].values
                 elif allow_substring_file_names:
-                    # Substring match with label_grep
-                    l_files = sorted(glob.glob(os.path.join(label_data_root, file + label_grep)))
+                    if os.path.exists(os.path.join(label_data_root, file + label_grep.strip('*'))):
+                        # Avoid glob if possible to speed up the dataset build
+                        l_files = [os.path.join(label_data_root, file + label_grep.strip('*'))]
+                    else:
+                        # Substring match with label_grep
+                        l_files = sorted(glob.glob(os.path.join(label_data_root, file + label_grep)))
                     if l_files:
                         sample["mask"] = l_files[-1]
                 else:
                     # Exact match
-                    file_path = os.path.join(label_data_root, file)
-                    if os.path.exists(file_path):
+                    file_path = os.path.join(label_data_root, file + label_grep.strip('*'))
+                    if skip_file_checks or os.path.exists(file_path):
                         sample["mask"] = file_path
                 if "mask" not in sample:
                     # Only add sample if mask is present
@@ -307,12 +313,12 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
             raise ValueError(f"No samples found for multimodal dataset. Please review files, path, and grep params.\n"
                              f"data_root: {data_root}\n"
                              f"image_grep: {image_grep}\n"
+                             f"allow_substring_file_names: {allow_substring_file_names}\n"
                              f"allow_missing_modalities: {allow_missing_modalities}\n"
                              f"Candidate prefixes: {', '.join([valid_files[i] for i in idx])}\n"
-                             f"Sample candidate paths: {', '.join([failed_candidates[i] for i in idx])}")
+                             f"Sample candidate paths: {', '.join([str(failed_candidates[i]) for i in idx])}")
 
-        self.rgb_modality = rgb_modality or self.modalities[0]
-        self.rgb_indices = rgb_indices or [0, 1, 2]
+        self.rgb_indices = rgb_indices or {image_modalities[0]: [0, 1, 2]}
 
         if dataset_bands is not None:
             self.dataset_bands = {m: generate_bands_intervals(m_bands) for m, m_bands in dataset_bands.items()}
@@ -349,16 +355,16 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
             self.transform = MultimodalTransforms(transform,
                                                   non_image_modalities=self.non_image_modalities + ['label']
                                                   if scalar_label else self.non_image_modalities)
-        elif transform is None:
-            self.transform = MultimodalToTensor(self.modalities)
-        else:
+        elif isinstance(transform, dict):
             # Modality-specific transforms
             transform = {m: transform[m] if m in transform else default_transform for m in self.modalities}
             self.transform = MultimodalTransforms(transform, shared=False)
+        elif transform is None:
+            self.transform = MultimodalToTensor(self.modalities)
+        else:
+            raise ValueError(f'Unknown transform type: {type(transform)}, expect A.Compose, dict or None.')
 
         # Ignore rasterio warning for not geo-referenced files
-        import rasterio
-
         warnings.filterwarnings("ignore", category=rasterio.errors.NotGeoreferencedWarning)
         warnings.filterwarnings("ignore", message="Dataset has no geotransform")
 
@@ -384,9 +390,15 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
 
             # Expand temporal dim
             if modality in self.filter_indices and self.expand_temporal_dimension:
-                data = rearrange(
-                    data, "(channels time) h w -> channels time h w", channels=len(self.dataset_bands[modality])
-                )
+                if self.temporal_channel_major:
+                    data = rearrange(
+                        data, "(channels time) h w -> channels time h w", channels=len(self.dataset_bands[modality])
+                    )
+                else:
+                    data = rearrange(
+                        data, "(time channels) h w -> channels time h w", channels=len(self.dataset_bands[modality])
+                    )
+
 
             if modality == "mask" and not self.scalar_label:
                 # tasks expect image masks without channel dim
@@ -454,66 +466,128 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
 
         Returns:
             a matplotlib Figure with the rendered sample
-
-        .. versionadded:: 0.2
         """
-        image = sample["image"]
-        if isinstance(image, dict):
-            image = image[self.rgb_modality]
-        if isinstance(image, torch.Tensor):
-            image = image.numpy()
-        image = image.take(self.rgb_indices, axis=0)
-        image = np.transpose(image, (1, 2, 0))
-        image = (image - image.min(axis=(0, 1))) * (1 / image.max(axis=(0, 1)))
-        image = np.clip(image, 0, 1)
+        suptitle = suptitle or sample.get("filename", "").split("/")[-1].split(".")[0]
+        images = {}
+        for mod, indices in self.rgb_indices.items():
+            if "image" in sample and isinstance(sample["image"], dict) and mod in sample["image"]:
+                # Move modality to sample dict
+                images[mod] = sample["image"][mod]
+            if mod in sample.keys():
+                image = sample[mod][indices]
+                # Per modality processing
+                if isinstance(image, torch.Tensor):
+                    image = image.numpy()
+                # Normalize to 0 - 1
+                image = image - image.min(axis=(-1, -2), keepdims=True)
+                image = image / np.quantile(image, q=0.99, axis=(-1, -2), keepdims=True)
+                image = np.clip(image, 0, 1)
+                # Channel last
+                image = np.moveaxis(image, 0, -1)
+                if image.ndim == 4:
+                    warnings.warn(f"Found time series data. Plotting only supports images, selecting the first one.")
+                    image = image[0]
+                images[mod] = image
+
+        if len(images) == 0:
+            warnings.warn(f"No RGB modalities found ({suptitle}). Sample keys: {list(sample.keys())}, "
+                          f"Dataset rgb_indices modalities: {list(self.rgb_indices.keys())}")
+            raise ValueError("No RGB images found.")
 
         if "mask" in sample:
             mask = sample["mask"]
             if isinstance(mask, torch.Tensor):
                 mask = mask.numpy()
-            if mask.ndim == 2:
-                mask = np.expand_dims(mask, axis=-1)
-            # Convert masked regions to 0.
-            mask = mask * -1 + 1
         else:
             mask = None
 
         if "prediction" in sample:
-            prediction = sample["prediction"]
-            if isinstance(image, dict):
-                prediction = prediction[self.rgb_modality]
+            prediction = sample["mask"]
+            if isinstance(prediction, dict):
+                raise ValueError("Multiple outputs not yet supported")
             if isinstance(prediction, torch.Tensor):
                 prediction = prediction.numpy()
-            # Assuming reconstructed image
-            prediction = prediction.take(self.rgb_indices, axis=0)
-            prediction = np.transpose(prediction, (1, 2, 0))
-            prediction = (prediction - image.min(axis=(0, 1))) * (1 / image.max(axis=(0, 1)))
-            prediction = np.clip(prediction, 0, 1)
+            while prediction.ndim < 2:
+                prediction = np.expand_dims(prediction, -1)
         else:
             prediction = None
 
-        return self._plot_sample(
-            image,
-            mask=mask,
-            prediction=prediction,
-            suptitle=suptitle,
-        )
+        # Scalar label
+        if "label" in sample:
+            label = sample["label"]
+            if isinstance(label, torch.Tensor):
+                label = label.numpy()
+            while label.ndim < 2:
+                label = np.expand_dims(label, -1)
+        else:
+            label = None
 
-    @staticmethod
-    def _plot_sample(image, mask=None, prediction=None, suptitle=None):
-        num_images = 1 + int(mask is not None) + int(prediction is not None)
-        fig, ax = plt.subplots(1, num_images, figsize=(5*num_images, 5), layout="compressed")
+        if hasattr(self, "num_classes"):
+            # Classification, Segmentation
+            vmin, vmax = 0, self.num_classes - 1
+            cmap = plt.get_cmap("rainbow")
+            cmap = ListedColormap(cmap(np.linspace(0.10, 1.0, self.num_classes)))  # Start with blue
+            class_names = self.class_names or list(range(0, self.num_classes))
+            handles = [Rectangle((0, 0), 1, 1, color=cmap(i))
+                       for i in range(self.num_classes)]
 
-        ax[0].axis("off")
-        ax[0].imshow(image)
+            if self.no_label_replace is not None:
+                if mask is not None:
+                    mask[mask == self.no_label_replace] = -1
+                elif label is not None:
+                    label[label == self.no_label_replace] = -1
+                vmin = -1
+                cmap = cmap(np.arange(self.num_classes))
+                cmap = ListedColormap(np.vstack(([0, 0, 0, 1], cmap)), N=len(cmap) + 1)
+                class_names = ["No label"] + class_names
+                handles = [Rectangle((0, 0), 1, 1, color=(0, 0, 0, 1))] + handles
+        else:
+            # Regression
+            vmax = np.max([mask.max() if mask is not None else 0,
+                           prediction.max() if prediction is not None else 0,
+                           label.max() if label is not None else 0])
+            vmin = np.min([mask.min() if mask is not None else 0,
+                           prediction.min() if prediction is not None else 0,
+                           label.min() if label is not None else 0])
+            cmap = "viridis"
+            class_names = handles = None
 
+        # Plot images
+        num_images = len(images) + int(mask is not None or label is not None) + int(prediction is not None)
+        fig, ax = plt.subplots(1, num_images, figsize=(5*num_images, 5))
+
+        for i, (mod, image) in enumerate(images.items()):
+            ax[i].imshow(image)
+            ax[i].axis("off")
+            ax[i].set_title(mod)
+
+        image = list(images.values())[0]  # First RGB modality as base image for mask
+
+        mask_i = -1 if prediction is None else -2
         if mask is not None:
-            ax[1].axis("off")
-            ax[1].imshow(image * mask)
+            ax[mask_i].imshow(image)
+            ax[mask_i].imshow(mask, alpha=0.7, vmin=vmin, vmax=vmax, cmap=cmap, interpolation="nearest")
+            ax[mask_i].axis("off")
+            ax[mask_i].set_title("GT Mask")
+
+            if class_names is not None:
+                # Segmentation task
+                ax[-1].legend(handles, class_names, loc="upper left", bbox_to_anchor=(1, 1))
 
         if prediction is not None:
-            ax[num_images-1].axis("off")
-            ax[num_images-1].imshow(prediction)
+            ax[-1].imshow(image)
+            ax[-1].imshow(prediction, alpha=0.7, vmin=vmin, vmax=vmax, cmap=cmap, interpolation="nearest")
+            ax[-1].axis("off")
+            ax[-1].set_title("Prediction")
+
+        if label is not None:
+            # Plot scalar values
+            ax[mask_i].imshow(image)
+            ax[mask_i].imshow(label, alpha=0.7, vmin=vmin, vmax=vmax, cmap=cmap, interpolation="nearest")
+            ax[mask_i].axis("off")
+            ax[mask_i].set_title(f"GT Label:\n{label[:, 0]}")
+            if prediction is not None:
+                ax[-1].set_title(f"Prediction:\n{prediction[:, 0]}")
 
         if suptitle is not None:
             plt.suptitle(suptitle)
@@ -532,14 +606,14 @@ class GenericMultimodalSegmentationDataset(GenericMultimodalDataset):
         label_grep: str | None = "*",
         split: Path | None = None,
         image_modalities: list[str] | None = None,
-        rgb_modality: str | None = None,
         rgb_indices: list[str] | None = None,
         allow_missing_modalities: bool = False,
         allow_substring_file_names: bool = False,
-        dataset_bands: dict[list] | None = None,
-        output_bands: dict[list] | None = None,
+        skip_file_checks: bool = False,
+        dataset_bands: dict[str, list] | None = None,
+        output_bands: dict[str, list] | None = None,
         class_names: list[str] | None = None,
-        constant_scale: dict[float] = 1.0,
+        constant_scale: dict[str, float] = None,
         transform: A.Compose | None = None,
         no_data_replace: float | None = None,
         no_label_replace: int | None = -1,
@@ -569,13 +643,14 @@ class GenericMultimodalSegmentationDataset(GenericMultimodalDataset):
             image_modalities(list[str], optional): List of pixel-level raster modalities. Defaults to data_root.keys().
                 The difference between all modalities and image_modalities are non-image modalities which are treated
                 differently during the transforms and are not modified but only converted into a tensor if possible.
-            rgb_modality (str, optional): Modality used for RGB plots. Defaults to first modality in data_root.keys().
-            rgb_indices (list[str], optional): Indices of RGB channels. Defaults to [0, 1, 2].
+            rgb_indices (dict[str, list[int]], optional): Indices of RGB channels for plotting with the format
+                {<modality>: [<band indices>]}. Defaults to {image_modalities[0]: [0, 1, 2]} if not provided.
             allow_missing_modalities (bool, optional): Allow missing modalities during data loading. Defaults to False.
-            allow_substring_file_names (bool, optional): Allow substrings during sample identification by adding
-                image or label grep to the sample prefixes. If False, treats sample prefixes as full file names.
-                If True and no split file is provided, considers the file stem as prefix, otherwise the full file name.
-                Defaults to True.
+            allow_substring_file_names (bool, optional): Allow substrings during sample identification using
+                wildcards (*). If False, treats sample prefix + image_grep as full file name. Defaults to True.
+            skip_file_checks (bool, optional): Skips the check if a sample path exists. Only works
+                with allow_missing_modalities=False and allow_substring_file_names=False. Samples are expected in the
+                format <prefix><image_grep> without any wildcards (*), e.g. sample1_s2l2a.tif. Defaults to False.
             dataset_bands (dict[list], optional): Bands present in the dataset, provided in a dictionary with modalities
                 as keys. This parameter names input channels (bands) using HLSBands, ints, int ranges, or strings, so
                 that they can then be referred to by output_bands. Needs to be superset of output_bands. Can be a subset
@@ -583,15 +658,14 @@ class GenericMultimodalSegmentationDataset(GenericMultimodalDataset):
             output_bands (dict[list], optional): Bands that should be output by the dataset as named by dataset_bands,
                 provided as a dictionary with modality keys. Can be subset of all modalities. Defaults to None.
             class_names (list[str], optional): Names of the classes. Defaults to None.
-            constant_scale (dict[float]): Factor to multiply data values by, provided as a dictionary with modalities as
-                keys. Can be subset of all modalities. Defaults to None.
+            constant_scale (dict[str, float]): Factor to multiply data values by, provided as a dictionary with
+                modalities as keys. Can be subset of all modalities. Defaults to None.
             transform (Albumentations.Compose | dict | None): Albumentations transform to be applied to all image
                 modalities (transformation are shared between image modalities, e.g., similar crop or rotation).
-                Should end with ToTensorV2(). If used through the generic_data_module, should not include normalization.
-                Not supported for multi-temporal data. The transform is not applied to non-image data, which is only
-                converted to tensors if possible. If dict, can include multiple transforms per modality which are
-                applied separately (no shared parameters between modalities).
-                Defaults to None, which simply applies ToTensorV2().
+                Should end with albumentations.ToTensorV2(). If used through the generic_data_module, should not include
+                normalization. The transform is not applied to non-image data, which is only converted to tensors if
+                possible. If dict with modalities as keys, transforms are applied seperatly per modality without shared
+                parameters. Defaults to terratorch.datasets.transforms.MultimodalToTensor().
             no_data_replace (float | None): Replace nan values in input data with this value.
                 If None, does no replacement. Defaults to None.
             no_label_replace (float | None): Replace nan values in label with this value.
@@ -614,10 +688,10 @@ class GenericMultimodalSegmentationDataset(GenericMultimodalDataset):
             label_grep=label_grep,
             split=split,
             image_modalities=image_modalities,
-            rgb_modality=rgb_modality,
             rgb_indices=rgb_indices,
             allow_missing_modalities=allow_missing_modalities,
             allow_substring_file_names=allow_substring_file_names,
+            skip_file_checks=skip_file_checks,
             dataset_bands=dataset_bands,
             output_bands=output_bands,
             constant_scale=constant_scale,
@@ -642,92 +716,6 @@ class GenericMultimodalSegmentationDataset(GenericMultimodalDataset):
 
         return item
 
-    def plot(
-        self, sample: dict[str, torch.Tensor], suptitle: str | None = None, show_axes: bool | None = False
-    ) -> Figure:
-        """Plot a sample from the dataset.
-
-        Args:
-            sample: a sample returned by :meth:`__getitem__`
-            suptitle: optional string to use as a suptitle
-            show_axes: whether to show axes or not
-
-        Returns:
-            a matplotlib Figure with the rendered sample
-
-        .. versionadded:: 0.2
-        """
-        image = sample["image"]
-        if isinstance(image, dict):
-            image = image[self.rgb_modality]
-        if isinstance(image, torch.Tensor):
-            image = image.numpy()
-        image = image.take(self.rgb_indices, axis=0)
-        image = np.transpose(image, (1, 2, 0))
-        image = (image - image.min(axis=(0, 1))) * (1 / image.max(axis=(0, 1)))
-        image = np.clip(image, 0, 1)
-
-        label_mask = sample["mask"]
-        if isinstance(label_mask, torch.Tensor):
-            label_mask = label_mask.numpy()
-
-        showing_predictions = "prediction" in sample
-        if showing_predictions:
-            prediction_mask = sample["prediction"]
-            if isinstance(prediction_mask, torch.Tensor):
-                prediction_mask = prediction_mask.numpy()
-
-        return self._plot_sample(
-            image,
-            label_mask,
-            self.num_classes,
-            prediction=prediction_mask if showing_predictions else None,
-            suptitle=suptitle,
-            class_names=self.class_names,
-            show_axes=show_axes,
-        )
-
-    @staticmethod
-    def _plot_sample(image, label, num_classes, prediction=None, suptitle=None, class_names=None, show_axes=False):
-        num_images = 5 if prediction is not None else 4
-        fig, ax = plt.subplots(1, num_images, figsize=(12, 10), layout="compressed")
-        axes_visibility = "on" if show_axes else "off"
-
-        # for legend
-        ax[0].axis("off")
-
-        norm = mpl.colors.Normalize(vmin=0, vmax=num_classes - 1)
-        ax[1].axis(axes_visibility)
-        ax[1].title.set_text("Image")
-        ax[1].imshow(image)
-
-        ax[2].axis(axes_visibility)
-        ax[2].title.set_text("Ground Truth Mask")
-        ax[2].imshow(label, cmap="jet", norm=norm)
-
-        ax[3].axis(axes_visibility)
-        ax[3].title.set_text("GT Mask on Image")
-        ax[3].imshow(image)
-        ax[3].imshow(label, cmap="jet", alpha=0.3, norm=norm)
-
-        if prediction is not None:
-            ax[4].axis(axes_visibility)
-            ax[4].title.set_text("Predicted Mask")
-            ax[4].imshow(prediction, cmap="jet", norm=norm)
-
-        cmap = plt.get_cmap("jet")
-        legend_data = []
-        for i, _ in enumerate(range(num_classes)):
-            class_name = class_names[i] if class_names else str(i)
-            data = [i, cmap(norm(i)), class_name]
-            legend_data.append(data)
-        handles = [Rectangle((0, 0), 1, 1, color=tuple(v for v in c)) for k, c, n in legend_data]
-        labels = [n for k, c, n in legend_data]
-        ax[0].legend(handles, labels, loc="center")
-        if suptitle is not None:
-            plt.suptitle(suptitle)
-        return fig
-
 
 class GenericMultimodalPixelwiseRegressionDataset(GenericMultimodalDataset):
     """GenericNonGeoPixelwiseRegressionDataset"""
@@ -740,13 +728,13 @@ class GenericMultimodalPixelwiseRegressionDataset(GenericMultimodalDataset):
         label_grep: str | None = "*",
         split: Path | None = None,
         image_modalities: list[str] | None = None,
-        rgb_modality: str | None = None,
         rgb_indices: list[int] | None = None,
         allow_missing_modalities: bool = False,
         allow_substring_file_names: bool = False,
-        dataset_bands: dict[list] | None = None,
-        output_bands: dict[list] | None = None,
-        constant_scale: dict[float] = 1.0,
+        skip_file_checks: bool = False,
+        dataset_bands: dict[str, list] | None = None,
+        output_bands: dict[str, list] | None = None,
+        constant_scale: dict[str, float] = None,
         transform: A.Compose | dict | None = None,
         no_data_replace: float | None = None,
         no_label_replace: float | None = None,
@@ -775,13 +763,14 @@ class GenericMultimodalPixelwiseRegressionDataset(GenericMultimodalDataset):
             image_modalities(list[str], optional): List of pixel-level raster modalities. Defaults to data_root.keys().
                 The difference between all modalities and image_modalities are non-image modalities which are treated
                 differently during the transforms and are not modified but only converted into a tensor if possible.
-            rgb_modality (str, optional): Modality used for RGB plots. Defaults to first modality in data_root.keys().
-            rgb_indices (list[str], optional): Indices of RGB channels. Defaults to [0, 1, 2].
+            rgb_indices (dict[str, list[int]], optional): Indices of RGB channels for plotting with the format
+                {<modality>: [<band indices>]}. Defaults to {image_modalities[0]: [0, 1, 2]} if not provided.
             allow_missing_modalities (bool, optional): Allow missing modalities during data loading. Defaults to False.
-            allow_substring_file_names (bool, optional): Allow substrings during sample identification by adding
-                image or label grep to the sample prefixes. If False, treats sample prefixes as full file names.
-                If True and no split file is provided, considers the file stem as prefix, otherwise the full file name.
-                Defaults to True.
+            allow_substring_file_names (bool, optional): Allow substrings during sample identification using
+                wildcards (*). If False, treats sample prefix + image_grep as full file name. Defaults to True.
+            skip_file_checks (bool, optional): Skips the check if a sample path exists. Only works
+                with allow_missing_modalities=False and allow_substring_file_names=False. Samples are expected in the
+                format <prefix><image_grep> without any wildcards (*), e.g. sample1_s2l2a.tif. Defaults to False.
             dataset_bands (dict[list], optional): Bands present in the dataset, provided in a dictionary with modalities
                 as keys. This parameter names input channels (bands) using HLSBands, ints, int ranges, or strings, so
                 that they can then be referred to by output_bands. Needs to be superset of output_bands. Can be a subset
@@ -791,10 +780,11 @@ class GenericMultimodalPixelwiseRegressionDataset(GenericMultimodalDataset):
             constant_scale (dict[float]): Factor to multiply data values by, provided as a dictionary with modalities as
                 keys. Can be subset of all modalities. Defaults to None.
             transform (Albumentations.Compose | dict | None): Albumentations transform to be applied to all image
-                modalities. Should end with ToTensorV2() and not include normalization. The transform is not applied to
-                non-image data, which is only converted to tensors if possible. If dict, can include separate transforms
-                per modality (no shared parameters between modalities).
-                Defaults to None, which simply applies ToTensorV2().
+                modalities (transformation are shared between image modalities, e.g., similar crop or rotation).
+                Should end with albumentations.ToTensorV2(). If used through the generic_data_module, should not include
+                normalization. The transform is not applied to non-image data, which is only converted to tensors if
+                possible. If dict with modalities as keys, transforms are applied seperatly per modality without shared
+                parameters. Defaults to terratorch.datasets.transforms.MultimodalToTensor().
             no_data_replace (float | None): Replace nan values in input data with this value.
                 If None, does no replacement. Defaults to None.
             no_label_replace (float | None): Replace nan values in label with this value.
@@ -817,10 +807,10 @@ class GenericMultimodalPixelwiseRegressionDataset(GenericMultimodalDataset):
             label_grep=label_grep,
             split=split,
             image_modalities=image_modalities,
-            rgb_modality=rgb_modality,
             rgb_indices=rgb_indices,
             allow_missing_modalities=allow_missing_modalities,
             allow_substring_file_names=allow_substring_file_names,
+            skip_file_checks=skip_file_checks,
             dataset_bands=dataset_bands,
             output_bands=output_bands,
             constant_scale=constant_scale,
@@ -843,80 +833,6 @@ class GenericMultimodalPixelwiseRegressionDataset(GenericMultimodalDataset):
 
         return item
 
-    def plot(
-        self, sample: dict[str, torch.Tensor], suptitle: str | None = None, show_axes: bool | None = False
-    ) -> Figure:
-        """Plot a sample from the dataset.
-
-        Args:
-            sample (dict[str, Tensor]): a sample returned by :meth:`__getitem__`
-            suptitle (str|None): optional string to use as a suptitle
-            show_axes (bool|None): whether to show axes or not
-
-        Returns:
-            a matplotlib Figure with the rendered sample
-
-        .. versionadded:: 0.2
-        """
-
-        image = sample["image"]
-        if isinstance(image, dict):
-            image = image[self.rgb_modality]
-        if isinstance(image, torch.Tensor):
-            image = image.numpy()
-        image = image.take(self.rgb_indices, axis=0)
-        image = np.transpose(image, (1, 2, 0))
-        image = (image - image.min(axis=(0, 1))) * (1 / image.max(axis=(0, 1)))
-        image = np.clip(image, 0, 1)
-
-        label_mask = sample["mask"]
-        if isinstance(label_mask, torch.Tensor):
-            label_mask = label_mask.numpy()
-
-        showing_predictions = "prediction" in sample
-        if showing_predictions:
-            prediction_mask = sample["prediction"]
-            if isinstance(prediction_mask, torch.Tensor):
-                prediction_mask = prediction_mask.numpy()
-
-        return self._plot_sample(
-            image,
-            label_mask,
-            prediction=prediction_mask if showing_predictions else None,
-            suptitle=suptitle,
-            show_axes=show_axes,
-        )
-
-    @staticmethod
-    def _plot_sample(image, label, prediction=None, suptitle=None, show_axes=False):
-        num_images = 4 if prediction is not None else 3
-        fig, ax = plt.subplots(1, num_images, figsize=(12, 10), layout="compressed")
-        axes_visibility = "on" if show_axes else "off"
-
-        norm = mpl.colors.Normalize(vmin=label.min(), vmax=label.max())
-        ax[0].axis(axes_visibility)
-        ax[0].title.set_text("Image")
-        ax[0].imshow(image)
-
-        ax[1].axis(axes_visibility)
-        ax[1].title.set_text("Ground Truth Mask")
-        ax[1].imshow(label, cmap="Greens", norm=norm)
-
-        ax[2].axis(axes_visibility)
-        ax[2].title.set_text("GT Mask on Image")
-        ax[2].imshow(image)
-        ax[2].imshow(label, cmap="Greens", alpha=0.3, norm=norm)
-        # ax[2].legend()
-
-        if prediction is not None:
-            ax[3].axis(axes_visibility)
-            ax[3].title.set_text("Predicted Mask")
-            ax[3].imshow(prediction, cmap="Greens", norm=norm)
-
-        if suptitle is not None:
-            plt.suptitle(suptitle)
-        return fig
-
 
 class GenericMultimodalScalarDataset(GenericMultimodalDataset):
     """GenericMultimodalClassificationDataset"""
@@ -930,14 +846,14 @@ class GenericMultimodalScalarDataset(GenericMultimodalDataset):
         label_grep: str | None = "*",
         split: Path | None = None,
         image_modalities: list[str] | None = None,
-        rgb_modality: str | None = None,
         rgb_indices: list[int] | None = None,
         allow_missing_modalities: bool = False,
         allow_substring_file_names: bool = False,
-        dataset_bands: list[HLSBands | int | tuple[int, int] | str] | None = None,
-        output_bands: list[HLSBands | int | tuple[int, int] | str] | None = None,
+        skip_file_checks: bool = False,
+        dataset_bands: dict[str, list] | None = None,
+        output_bands: dict[str, list] | None = None,
         class_names: list[str] | None = None,
-        constant_scale: dict[float] = 1.0,
+        constant_scale: dict[str, float] = None,
         transform: A.Compose | None = None,
         no_data_replace: float | None = None,
         no_label_replace: int | None = None,
@@ -968,13 +884,14 @@ class GenericMultimodalScalarDataset(GenericMultimodalDataset):
             image_modalities(list[str], optional): List of pixel-level raster modalities. Defaults to data_root.keys().
                 The difference between all modalities and image_modalities are non-image modalities which are treated
                 differently during the transforms and are not modified but only converted into a tensor if possible.
-            rgb_modality (str, optional): Modality used for RGB plots. Defaults to first modality in data_root.keys().
-            rgb_indices (list[str], optional): Indices of RGB channels. Defaults to [0, 1, 2].
+            rgb_indices (dict[str, list[int]], optional): Indices of RGB channels for plotting with the format
+                {<modality>: [<band indices>]}. Defaults to {image_modalities[0]: [0, 1, 2]} if not provided.
             allow_missing_modalities (bool, optional): Allow missing modalities during data loading. Defaults to False.
-            allow_substring_file_names (bool, optional): Allow substrings during sample identification by adding
-                image or label grep to the sample prefixes. If False, treats sample prefixes as full file names.
-                If True and no split file is provided, considers the file stem as prefix, otherwise the full file name.
-                Defaults to True.
+            allow_substring_file_names (bool, optional): Allow substrings during sample identification using
+                wildcards (*). If False, treats sample prefix + image_grep as full file name. Defaults to True.
+            skip_file_checks (bool, optional): Skips the check if a sample path exists. Only works
+                with allow_missing_modalities=False and allow_substring_file_names=False. Samples are expected in the
+                format <prefix><image_grep> without any wildcards (*), e.g. sample1_s2l2a.tif. Defaults to False.
             dataset_bands (dict[list], optional): Bands present in the dataset, provided in a dictionary with modalities
                 as keys. This parameter names input channels (bands) using HLSBands, ints, int ranges, or strings, so
                 that they can then be referred to by output_bands. Needs to be superset of output_bands. Can be a subset
@@ -982,15 +899,14 @@ class GenericMultimodalScalarDataset(GenericMultimodalDataset):
             output_bands (dict[list], optional): Bands that should be output by the dataset as named by dataset_bands,
                 provided as a dictionary with modality keys. Can be subset of all modalities. Defaults to None.
             class_names (list[str], optional): Names of the classes. Defaults to None.
-            constant_scale (dict[float]): Factor to multiply data values by, provided as a dictionary with modalities as
-                keys. Can be subset of all modalities. Defaults to None.
+            constant_scale (dict[str, float]): Factor to multiply data values by, provided as a dictionary with
+                modalities as keys. Can be subset of all modalities. Defaults to None.
             transform (Albumentations.Compose | dict | None): Albumentations transform to be applied to all image
                 modalities (transformation are shared between image modalities, e.g., similar crop or rotation).
-                Should end with ToTensorV2(). If used through the generic_data_module, should not include normalization.
-                Not supported for multi-temporal data. The transform is not applied to non-image data, which is only
-                converted to tensors if possible. If dict, can include multiple transforms per modality which are
-                applied separately (no shared parameters between modalities).
-                Defaults to None, which simply applies ToTensorV2().
+                Should end with albumentations.ToTensorV2(). If used through the generic_data_module, should not include
+                normalization. The transform is not applied to non-image data, which is only converted to tensors if
+                possible. If dict with modalities as keys, transforms are applied seperatly per modality without shared
+                parameters. Defaults to terratorch.datasets.transforms.MultimodalToTensor().
             no_data_replace (float | None): Replace nan values in input data with this value.
                 If None, does no replacement. Defaults to None.
             no_label_replace (float | None): Replace nan values in label with this value.
@@ -1013,10 +929,10 @@ class GenericMultimodalScalarDataset(GenericMultimodalDataset):
             label_grep=label_grep,
             split=split,
             image_modalities=image_modalities,
-            rgb_modality=rgb_modality,
             rgb_indices=rgb_indices,
             allow_missing_modalities=allow_missing_modalities,
             allow_substring_file_names=allow_substring_file_names,
+            skip_file_checks=skip_file_checks,
             dataset_bands=dataset_bands,
             output_bands=output_bands,
             constant_scale=constant_scale,
@@ -1038,80 +954,3 @@ class GenericMultimodalScalarDataset(GenericMultimodalDataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         item = super().__getitem__(index)
         return item
-
-    def plot(
-        self, sample: dict[str, torch.Tensor], suptitle: str | None = None, show_axes: bool | None = False
-    ) -> Figure:
-        """Plot a sample from the dataset.
-
-        Args:
-            sample (dict[str, Tensor]): a sample returned by :meth:`__getitem__`
-            suptitle (str|None): optional string to use as a suptitle
-            show_axes (bool|None): whether to show axes or not
-
-        Returns:
-            a matplotlib Figure with the rendered sample
-
-        .. versionadded:: 0.2
-        """
-
-        # TODO: Check plotting code for classification tasks and add it to generic classification dataset as well
-        raise NotImplementedError
-
-        image = sample["image"]
-        if isinstance(image, dict):
-            image = image[self.rgb_modality]
-        if isinstance(image, torch.Tensor):
-            image = image.numpy()
-        image = image.take(self.rgb_indices, axis=0)
-        image = np.transpose(image, (1, 2, 0))
-        image = (image - image.min(axis=(0, 1))) * (1 / image.max(axis=(0, 1)))
-        image = np.clip(image, 0, 1)
-
-        label_mask = sample["mask"]
-        if isinstance(label_mask, torch.Tensor):
-            label_mask = label_mask.numpy()
-
-        showing_predictions = "prediction" in sample
-        if showing_predictions:
-            prediction_mask = sample["prediction"]
-            if isinstance(prediction_mask, torch.Tensor):
-                prediction_mask = prediction_mask.numpy()
-
-        return self._plot_sample(
-            image,
-            label_mask,
-            prediction=prediction_mask if showing_predictions else None,
-            suptitle=suptitle,
-            show_axes=show_axes,
-        )
-
-    @staticmethod
-    def _plot_sample(image, label, prediction=None, suptitle=None, show_axes=False):
-        num_images = 4 if prediction is not None else 3
-        fig, ax = plt.subplots(1, num_images, figsize=(12, 10), layout="compressed")
-        axes_visibility = "on" if show_axes else "off"
-
-        norm = mpl.colors.Normalize(vmin=label.min(), vmax=label.max())
-        ax[0].axis(axes_visibility)
-        ax[0].title.set_text("Image")
-        ax[0].imshow(image)
-
-        ax[1].axis(axes_visibility)
-        ax[1].title.set_text("Ground Truth Mask")
-        ax[1].imshow(label, cmap="Greens", norm=norm)
-
-        ax[2].axis(axes_visibility)
-        ax[2].title.set_text("GT Mask on Image")
-        ax[2].imshow(image)
-        ax[2].imshow(label, cmap="Greens", alpha=0.3, norm=norm)
-        # ax[2].legend()
-
-        if prediction is not None:
-            ax[3].axis(axes_visibility)
-            ax[3].title.set_text("Predicted Mask")
-            ax[3].imshow(prediction, cmap="Greens", norm=norm)
-
-        if suptitle is not None:
-            plt.suptitle(suptitle)
-        return fig

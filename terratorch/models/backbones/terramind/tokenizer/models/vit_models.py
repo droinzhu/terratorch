@@ -28,17 +28,6 @@ from functools import partial
 from torch.amp import autocast
 from einops import rearrange
 
-# xFormers imports
-try:
-    if torch.cuda.is_available(): # Only use xformers if GPUs are available
-        from xformers.ops import memory_efficient_attention, unbind
-        XFORMERS_AVAILABLE = True
-    else:
-        XFORMERS_AVAILABLE = False
-except ImportError:
-    logging.getLogger('terramind').debug("xFormers not available")
-    XFORMERS_AVAILABLE = False
-
 
 def pair(t):
     return t if isinstance(t, tuple) else (t, t)
@@ -47,12 +36,12 @@ def pair(t):
 def build_2d_sincos_posemb(h, w, embed_dim=1024, temperature=10000.):
     """Sine-cosine positional embeddings as used in MoCo-v3
     """
-    grid_w = torch.arange(w, dtype=torch.float)
-    grid_h = torch.arange(h, dtype=torch.float)
+    grid_w = torch.arange(w, dtype=torch.get_default_dtype())
+    grid_h = torch.arange(h, dtype=torch.get_default_dtype())
     grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing='ij')
     assert embed_dim % 4 == 0, 'Embed dimension must be divisible by 4 for 2D sin-cos position embedding'
     pos_dim = embed_dim // 4
-    omega = torch.arange(pos_dim, dtype=torch.float) / pos_dim
+    omega = torch.arange(pos_dim, dtype=torch.get_default_dtype()) / pos_dim
     omega = 1. / (temperature ** omega)
     out_w = torch.einsum('m,d->md', [grid_w.flatten(), omega])
     out_h = torch.einsum('m,d->md', [grid_h.flatten(), omega])
@@ -185,22 +174,16 @@ class Attention(nn.Module):
 
     def forward(self, x):
         B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)  # (B, num_heads, N, head_dim)
 
-        if XFORMERS_AVAILABLE:
-            q, k, v = unbind(qkv, 2) # Each is of shape B x N x num_heads x C // num_heads
-            x = memory_efficient_attention(q, k, v)
-            x = x.reshape([B, N, C])
-        else:
-            qkv = qkv.permute(2, 0, 3, 1, 4)
-            q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
+            scale=self.scale,
+        )
 
-            attn = (q @ k.transpose(-2, -1)) * self.scale
-            attn = attn.softmax(dim=-1)
-            attn = self.attn_drop(attn)
-
-            x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-
+        x = y.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -224,15 +207,17 @@ class CrossAttention(nn.Module):
         B, N, C = x.shape
         _, M, _ = context.shape
 
-        q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # (B, H, N, Dh)
         kv = self.kv(context).reshape(B, M, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        k, v = kv[0], kv[1]
+        k, v = kv[0], kv[1]  # (B, H, M, Dh)
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
+            scale=self.scale,
+        )
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
+        x = y.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -484,10 +469,10 @@ class ViTEncoder(nn.Module):
         if x.shape[1] != self.in_channels:
             # Apply one hot encoding for segmentation inputs
             if len(x.shape) == 3:
-                x = F.one_hot(x.to(torch.long), num_classes=self.in_channels).permute(0, 3, 1, 2).to(torch.float)
+                x = F.one_hot(x.to(torch.long), num_classes=self.in_channels).permute(0, 3, 1, 2).to(torch.get_default_dtype())
             elif len(x.shape) == 4 and x.shape[1] == 1:
                 x = F.one_hot(x.to(torch.long).squeeze(1),
-                              num_classes=self.in_channels).permute(0, 3, 1, 2).to(torch.float)
+                              num_classes=self.in_channels).permute(0, 3, 1, 2).to(torch.get_default_dtype())
             else:
                 raise ValueError(f'Expect input data with {self.in_channels} classes, found {x.shape}. '
                                  f'Either with class indexes and shape [B, H, W] or one hot encoded [B, C, H, W].')

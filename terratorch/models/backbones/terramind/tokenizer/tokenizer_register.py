@@ -441,7 +441,7 @@ def terramind_v01_caption_tokenizer(pretrained=True, tokenizer_file=None, *args,
                       f"\nMake sure to install `pip install tokenizers`.")
         raise import_error_tokenizers
 
-    if pretrained and tokenizer_file is not None:
+    if pretrained and tokenizer_file is None:
         tokenizer_file = hf_hub_download(
             repo_id=pretrained_weights["terramind_v01_caption_tokenizer"]["hf_hub_id"],
             filename=pretrained_weights["terramind_v01_caption_tokenizer"]["hf_hub_filename"]

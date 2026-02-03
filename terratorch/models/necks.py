@@ -65,40 +65,72 @@ class SelectIndices(Neck):
 
 @TERRATORCH_NECK_REGISTRY.register
 class AggregateTokens(Neck):
-    def __init__(self, channel_list: list[int], pooling: str | int = "mean", index: int  = -1):
-        """Aggregate tokens/patch embeddings to a single embedding. Mainly used for classification models.
+    def __init__(
+        self,
+        channel_list: list[int],
+        pooling: str | int = "mean",
+        indices: int | list[int] | None = None,
+        index: int | None = -1,  # deprecated,
+        drop_cls: bool = False,
+    ):
+        """Aggregate tokens/patch embeddings to a single embedding per layer. Mainly used for classification models.
 
         Args:
             pooling (str, int): Pooling method. Options: 'mean', 'max', 'min', 'CLS', or token index (int).
-            index (int): Select the layer index if mulitple outputs are provided. Defaults to -1.
+            indices (int | list[int] | None): Layer indices to select from backbone outputs.
+            index (int): Deprecated. Select the layer index if multiple outputs are provided. Defaults to -1.
+            drop_cls (bool): Whether to drop first token for pooling methods ("mean", "min", "max").
+                Intended for ViT-style backbones with a CLS token. Defaults to False.
         """
         super().__init__(channel_list)
-        self.pooling = pooling
-        self.index = index
-        self.latent_dim = channel_list[index]
+
+        self.indices = indices or index # If indices is not set, use deprecated index, which defaults to -1.
+        if isinstance(self.indices, int): # Wrap int index/ indices to be list.
+            self.indices = [self.indices]
+
+        self.pooling = pooling.lower()
+        self.latent_dim = [channel_list[i] for i in self.indices]
+        self.drop_cls = drop_cls
+
+        if self.drop_cls and self.pooling == "cls":
+            raise ValueError("drop_cls=True is incompatible with pooling='cls'.")
 
     def forward(self, features: list[torch.Tensor], **kwargs) -> list[torch.Tensor]:
-        features = features[self.index] if len(features) > 1 else features[0]
+        aggregated_features = []
 
-        if features.dim() != 3:
-            # Assuming token grid, flattening token dimension
-            B  = features.shape[0]
-            features = features.reshape(B, -1, self.latent_dim)
+        for i, index in enumerate(self.indices):
+            feat = features[index] if len(features) > 1 else features[0]
 
-        if isinstance(self.pooling, int):
-            # Select token index
-            return [features[..., pooling, :]]
-        elif self.pooling == "CLS":
-            # Assuming CLS token is on first position
-            return [features[..., 0, :]]
-        elif self.pooling == "mean":
-            return [features.mean(dim=1)]
-        elif self.pooling == "max":
-            return [features.max(dim=1)[0]]
-        elif self.pooling == "min":
-            return [features.min(dim=1)[0]]
-        else:
-            raise ValueError(f"Pooling method {self.pooling} not recognized.")
+            if feat.dim() == 3:
+                # Assuming spatial grid, flattening spatial dimension
+                B  = feat.shape[0]
+                feat = feat.reshape(B, -1, self.latent_dim[i])
+
+            elif feat.dim() == 5:
+                # Assuming spatiotemporal grid, flattening spatial dimension
+                B = feat.shape[0]
+                T = feat.shape[2]
+                feat = feat.reshape(B, -1, T, self.latent_dim[i])
+
+            if self.drop_cls:
+                feat = feat[..., 1:, :]
+
+            if isinstance(self.pooling, int):
+                # Select token index
+                aggregated_features.append(feat[..., self.pooling, :])
+            elif self.pooling == "cls":
+                # Assuming CLS token is on first position
+                aggregated_features.append(feat[..., 0, :])
+            elif self.pooling == "mean":
+                aggregated_features.append(feat.mean(dim=1))
+            elif self.pooling == "max":
+                aggregated_features.append(feat.max(dim=1).values)
+            elif self.pooling == "min":
+                aggregated_features.append(feat.min(dim=1).values)
+            else:
+                raise ValueError(f"Pooling method {self.pooling} not recognized.")
+
+        return aggregated_features
 
     def process_channel_list(self, channel_list: list[int]) -> list[int]:
         return channel_list
@@ -209,40 +241,46 @@ class ReshapeTokensToImage(Neck):
     def forward(self, features: list[torch.Tensor], image_size=None, **kwargs) -> list[torch.Tensor]:
         out = []
         for x in features:
-            x_no_token = x[:, 1:, :] if self.remove_cls_token else x
-            x_no_token = x_no_token.reshape(x.shape[0], -1, x.shape[-1])
-            number_of_tokens = x_no_token.shape[1]
-            tokens_per_timestep = number_of_tokens // self.effective_time_dim
-
-            # Assume square images first
-            h = self.h or math.sqrt(tokens_per_timestep)
-            if h - int(h) == 0:
-                h = int(h)
+            if x.dim() >= 4:
+                out.append(x)
+                continue
+            elif x.dim() != 3:
+                raise ValueError(f"Expected token tensor (B,N,C) or image tensor (B,C,H,W). Got shape={tuple(x.shape)}")
             else:
-                assert image_size is not None, "image_size is not provided for neck ReshapeTokensToImage."
-                # Handle non-square images
-                patch_size = (np.prod(image_size) / tokens_per_timestep) ** 0.5
-                if patch_size % 1:
-                    if self.remove_cls_token:
-                        warnings.warn(f"Cannot infer grid shape from input tokens ({x.shape[1]}), assuming a cls_token "
-                                      f"(default setting). Retry ReshapeTokensToImage with remove_cls_token to False. "
-                                      "Silence this warning with remove_cls_token=False for neck ReshapeTokensToImage.")
-                        self.remove_cls_token = False
-                        return self.forward(features, image_size, **kwargs)
-                    else:
-                        raise ValueError(f"Cannot infer grid shape from from input tokens ({x.shape[1]}) with "
-                                         f"image_size = {image_size} in neck ReshapeTokensToImage. ")
-                h = int(img_h // patch_size)
+                x_no_token = x[:, 1:, :] if self.remove_cls_token else x
+                x_no_token = x_no_token.reshape(x.shape[0], -1, x.shape[-1])
+                number_of_tokens = x_no_token.shape[1]
+                tokens_per_timestep = number_of_tokens // self.effective_time_dim
 
-            encoded = rearrange(
-                x_no_token,
-                "batch (t h w) e -> batch (t e) h w",
-                batch=x_no_token.shape[0],
-                t=self.effective_time_dim,
-                h=h,
-            )
+                # Assume square images first
+                h = self.h or math.sqrt(tokens_per_timestep)
+                if h - int(h) == 0:
+                    h = int(h)
+                else:
+                    assert image_size is not None, "image_size is not provided for neck ReshapeTokensToImage."
+                    # Handle non-square images
+                    patch_size = (np.prod(image_size) / tokens_per_timestep) ** 0.5
+                    if patch_size % 1:
+                        if self.remove_cls_token:
+                            warnings.warn(f"Cannot infer grid shape from input tokens ({x.shape[1]}), assuming a cls_token "
+                                          f"(default setting). Retry ReshapeTokensToImage with remove_cls_token to False. "
+                                          "Silence this warning with remove_cls_token=False for neck ReshapeTokensToImage.")
+                            self.remove_cls_token = False
+                            return self.forward(features, image_size, **kwargs)
+                        else:
+                            raise ValueError(f"Cannot infer grid shape from from input tokens ({x.shape[1]}) with "
+                                             f"image_size = {image_size} in neck ReshapeTokensToImage. ")
+                    h = int(img_h // patch_size)
 
-            out.append(encoded)
+                encoded = rearrange(
+                    x_no_token,
+                    "batch (t h w) e -> batch (t e) h w",
+                    batch=x_no_token.shape[0],
+                    t=self.effective_time_dim,
+                    h=h,
+                )
+
+                out.append(encoded)
         return out
 
     def process_channel_list(self, channel_list: list[int]) -> list[int]:

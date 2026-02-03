@@ -1,7 +1,7 @@
 # reference torchgeo https://torchgeo.readthedocs.io/en/stable/_modules/torchgeo/models/resnet.html
 
 import torchgeo.models.resnet as resnet
-from torchgeo.models.resnet import ResNet, ResNet18_Weights, ResNet50_Weights, ResNet152_Weights, resnet18, resnet50, resnet152
+from torchgeo.models.resnet import ResNet18_Weights, ResNet50_Weights, ResNet152_Weights, resnet18, resnet50, resnet152
 import logging
 from collections.abc import Callable
 from functools import partial

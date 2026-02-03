@@ -33,6 +33,7 @@ class TiledInferenceParameters(BaseModel):
     w_crop: int = 512
     w_stride: int = None
     average_patches: bool = None
+    delta: int = 8
 
 class RequestData(BaseModel):
 

@@ -33,10 +33,11 @@ def test_neontree_datamodule(dummy_neontree_data):
     from terratorch.datamodules import MNeonTreeNonGeoDataModule
     from terratorch.datasets import MNeonTreeNonGeo
 
-    bands = MNeonTreeNonGeo.rgb_bands
+    bands = MNeonTreeNonGeo.all_band_names
     datamodule = MNeonTreeNonGeoDataModule(
         data_root=dummy_neontree_data,
         bands=bands,
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

@@ -16,10 +16,10 @@ class OpenSentinelMapDataModule(NonGeoDataModule):
         batch_size: int = 8,
         num_workers: int = 0,
         data_root: str = "./",
-        train_transform: A.Compose | None | list[A.BasicTransform] = None,
-        val_transform: A.Compose | None | list[A.BasicTransform] = None,
-        test_transform: A.Compose | None | list[A.BasicTransform] = None,
-        predict_transform: A.Compose | None | list[A.BasicTransform] = None,
+        train_transform: A.Compose | None | list = None,
+        val_transform: A.Compose | None | list = None,
+        test_transform: A.Compose | None | list = None,
+        predict_transform: A.Compose | None | list = None,
         spatial_interpolate_and_stack_temporally: bool = True,  # noqa: FBT001, FBT002
         pad_image: int | None = None,
         truncate_image: int | None = None,
@@ -33,10 +33,10 @@ class OpenSentinelMapDataModule(NonGeoDataModule):
             batch_size (int, optional): Batch size for DataLoaders. Defaults to 8.
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             data_root (str, optional): Root directory of the dataset. Defaults to "./".
-            train_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for training data.
-            val_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for validation data.
-            test_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for testing data.
-            predict_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for prediction data.
+            train_transform (A.Compose | None | list, optional): Transformations for training data.
+            val_transform (A.Compose | None | list, optional): Transformations for validation data.
+            test_transform (A.Compose | None | list, optional): Transformations for testing data.
+            predict_transform (A.Compose | None | list, optional): Transformations for prediction data.
             spatial_interpolate_and_stack_temporally (bool, optional): If True, the bands are interpolated and concatenated over time.
                 Default is True.
             pad_image (int | None, optional): Number of timesteps to pad the time dimension of the image.

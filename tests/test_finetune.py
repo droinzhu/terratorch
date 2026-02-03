@@ -59,7 +59,7 @@ def test_finetune_multiple_backbones_with_prediction(model_name):
         "--ckpt_path",
         "tests/all_ecos_random/version_0/checkpoints/epoch=0.ckpt",
         "--predict_output_dir",
-        "/tmp",
+        "./tmp",
         "--data.init_args.predict_data_root",
         "tests/resources/inputs",
     ]

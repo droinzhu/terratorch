@@ -7,7 +7,7 @@ include = ["terratorch*"]
 
 [project]
 name = "terratorch"
-version = "v1.1"
+version = "v1.2.1"
 description = "TerraTorch - The geospatial foundation model fine-tuning toolkit"
 license = { "text" = "Apache License, Version 2.0" }
 readme = "README.md"
@@ -28,7 +28,8 @@ authors = [
   { name = "Þorsteinn Elí Gíslason"},
   { name = "Raunak Bhansali"},
   { name = "Takao Moriyama"},
-  { name = "Þorsteinn Elí Gíslason"}
+  { name = "Þorsteinn Elí Gíslason"},
+  { name = "Isabelle Wittmann"}
 ]
 classifiers = [
 #  "Development Status :: 2 - Pre-Alpha",
@@ -41,20 +42,20 @@ classifiers = [
 
 dependencies = [
   "torch>2.0",
+  "numpy>=2.2",
   "torchvision",
   "rioxarray",
-  "albumentations==1.4.10",
-  "albucore==0.0.16",
+  "albumentations",
+  "albucore", 
   "rasterio",
   "torchmetrics",
   "geopandas",
-  "lightly",
-  "jsonargparse<=4.35.0",
+  "lightly==1.5.22",
   "h5py",
-  "lightning",
-  "segmentation-models-pytorch<=0.4",
-  "jsonargparse",
-  "torchgeo>=0.7.0",
+  "lightning>=2.6.0",
+  "segmentation-models-pytorch", #==0.5.0",
+  "jsonargparse>=4.40.0",
+  "torchgeo", #>=0.7.0,<0.7.2",
   "einops",
   "timm>=1.0.15",
   "pycocotools",
@@ -62,13 +63,20 @@ dependencies = [
   "tifffile",
   "python-box",
   "tqdm",
-  "wandb",
+  "wandb>=0.18.0",
   "tensorboard",
+  "diffusers",
+  "scikit-learn>=1.3.2",
+  "scikit-image",
+  "pyarrow",
+  "rich",
+  "termcolor"
 ]
 
 
 [project.entry-points."vllm.io_processor_plugins"]
 terratorch_segmentation = "terratorch.vllm.plugins.segmentation:register_segmentation_plugin"
+terratorch_tm_segmentation = "terratorch.vllm.plugins.segmentation:register_terramind_segmentation_plugin"
 
 [project.optional-dependencies]
 dev = [
@@ -85,23 +93,23 @@ test = [
   "pytest-coverage",
   "coverage-badge",
   "peft>=0.15.0",
-  "diffusers<=0.34.0",
+  "diffusers",
   "tokenizers",
   "dask",
-  "wandb",
-  "pytest-sugar",
-  "vllm>=0.10.2",
-  "pillow",
-  "imagehash",
   "numba",
   "hdf5plugin",
   "h5netcdf",
+  "geobenchv2>=0.9",
+  "terratorch-surya>=0.1.0",
+#  "PrithviWxC",  # Currently fails of pypi version conflics
+#  "granitewxc",  # Currently fails of pypi version conflics
 ]
 
 surya = [
   "numba",
   "hdf5plugin",
-  "h5netcdf"
+  "h5netcdf",
+  "terratorch-surya==0.1.0"
 ]
 
 mmseg = [
@@ -126,14 +134,24 @@ peft = [
 ]
 
 geobenchv2 = [
-  "geobench_v2",
+  "geobenchv2==0.9",
   "mlflow",
 ]
 
+vllm = [
+  "geobenchv2==0.9",
+  "vllm>=0.12,<=0.14.0",
+]
+
+vllm_test = [
+  "pillow",
+  "imagehash",
+]
+
 [project.urls]
-Documentation = "https://ibm.github.io/terratorch/"
-Issues = "https://github.com/IBM/terratorch/issues"
-Source = "https://github.com/IBM/terratorch"
+Documentation = "https://terrastackai.github.io/terratorch/"
+Issues = "https://github.com/terrastackai/terratorch/issues"
+Source = "https://github.com/terrastackai/terratorch"
 
 [project.scripts]
 terratorch = "terratorch.__main__:main"
@@ -141,6 +159,9 @@ terratorch = "terratorch.__main__:main"
 [[tool.mypy.overrides]]
 module = "timm"
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+norecursedirs = [".venv", "build", "dist", "site-packages"]
 
 [tool.black]
 target-version = ["py310"]

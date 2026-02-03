@@ -80,3 +80,49 @@ def test_biomasters_datamodule(dummy_biomasters_data):
     assert "S2" in batch, "Key S2 not found on predict_dataloader"
 
     gc.collect()
+
+def test_biomasters_random_subsample(dummy_biomasters_data):
+    from terratorch.datamodules import BioMasstersNonGeoDataModule
+    batch_size = 1
+    num_workers = 0
+    bands = {
+        "S1": ["VV_Asc", "VH_Asc", "VV_Desc"],
+        "S2": ["RED", "GREEN", "BLUE"]
+    }
+    sensors = ["S1", "S2"]
+
+    for as_time_series in [True, False]:
+
+        # Subsample to 50%
+        subset = 0.5
+
+        datamodule = BioMasstersNonGeoDataModule(
+            data_root=dummy_biomasters_data,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            bands=bands,
+            sensors=sensors,
+            as_time_series=as_time_series
+        )
+        datamodule.setup("fit")
+
+        # Determine expected number of samples depending on mode
+        df = pd.read_csv(
+            os.path.join(dummy_biomasters_data, "The_BioMassters_-_features_metadata.csv.csv")
+        )
+        df = df[(df["split"] == "train") & (df["satellite"].isin(["S1", "S2"]))]
+
+        if as_time_series:
+            # 1 sample per chip
+            unique_units = df["chip_id"].nunique()
+        else:
+            # 1 sample per (chip, month)
+            unique_units = df.drop_duplicates(["chip_id", "month"]).shape[0]
+
+        expected = max(1, int(unique_units * subset))
+        actual = len(datamodule.train_dataset)
+
+        assert actual == expected, (
+            f"Subsample mismatch for as_time_series={as_time_series}: "
+            f"expected {expected}, got {actual}"
+        )

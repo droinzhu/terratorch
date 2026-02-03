@@ -7,16 +7,17 @@ trainer:
   num_nodes: 1
   # precision: 16-mixed
   logger:
-    class_path: TensorBoardLogger
-    init_args:
-      save_dir: tests/
-      name: all_ecos_random
+    - class_path: lightning.pytorch.loggers.TensorBoardLogger
+      init_args:
+        save_dir: tests/
+        name: all_ecos_random
+
   callbacks:
-    - class_path: RichProgressBar
-    - class_path: LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: epoch
-    - class_path: EarlyStopping
+
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val/loss
         patience: 100
@@ -33,15 +34,14 @@ data:
     train_transform:
       - class_path: albumentations.HorizontalFlip
         init_args:
-          p: 0.5      
+          p: 0.5
       - class_path: albumentations.Rotate
         init_args:
           limit: 30
-          border_mode: 0 # cv2.BORDER_CONSTANT
+          border_mode: 0
           value: 0
-          # mask_value: 1
           p: 0.5
-      - class_path: ToTensorV2
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
     dataset_bands:
       - 0
       - BLUE

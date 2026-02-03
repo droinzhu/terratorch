@@ -58,7 +58,7 @@ class TorchNonGeoDataModule(NonGeoDataModule):
         cls: type[NonGeoDataModule],
         batch_size: int | None = None,
         num_workers: int = 0,
-        transforms: None | list[BasicTransform] = None,
+        transforms: None | list[Any] = None,
         **kwargs: Any,
     ):
         """Constructor
@@ -118,7 +118,7 @@ class TorchGeoDataModule(GeoDataModule):
         cls: type[GeoDataModule],
         batch_size: int | None = None,
         num_workers: int = 0,
-        transforms: None | list[BasicTransform] = None,
+        transforms: None | list[Any] = None,
         **kwargs: Any,
     ):
         """Constructor

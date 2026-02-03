@@ -1,34 +1,40 @@
 from pathlib import Path
 import warnings
+import logging
+import json
+from datetime import datetime, timezone
 
 import geopandas as gpd
 import numpy as np
 import rasterio
 import torch
 from rasterio.errors import NotGeoreferencedWarning
-from torchgeo.trainers import BaseTask
-from terratorch.models.utils import TemporalWrapper
-from terratorch.registry import BACKBONE_REGISTRY
+from concurrent.futures import ThreadPoolExecutor
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from terratorch.tasks.base_task import TerraTorchTask
+from terratorch.registry import MODEL_FACTORY_REGISTRY
 
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 warnings.simplefilter("once", UserWarning)
+logger = logging.getLogger("EmbeddingGenerationTask")
 
-class EmbeddingGenerationTask(BaseTask):
+class EmbeddingGenerationTask(TerraTorchTask):
     """
     Task that runs inference over model backbone to generate and save embeddings.
     """
 
     def __init__(
             self,
-            model: str,
-            model_args: dict = None,
+            model_args: dict,
             output_dir: str = "embeddings",
             embed_file_key: str = "filename",
-            layers: list[int] | None = None,
-            temporal_cfg: dict | None = None,
+            layers: list[int] = [-1],
             output_format: str = "tiff",
-            has_cls: bool | None = None,
+            has_cls: bool = False,
             embedding_pooling: str | None = None,
+            freeze_backbone = True
     ) -> None:
         """Constructor for EmbeddingGenerationTask
 
@@ -38,38 +44,73 @@ class EmbeddingGenerationTask(BaseTask):
             output_dir (str, optional): Directory to save embeddings. Defaults to "embeddings".
             embed_file_key (str, optional): Identifier key for single file ids in input data, will be used as embedding identifiers. Defaults to "filename".
             layers (list[int], optional): List of layers to extract embeddings from. Defaults to [-1].
-            temporal_cfg (dict, optional): Configuration for temporal processing. Defaults to None.
             output_format (str, optional): Format for saving embeddings ('tiff' for GeoTIFF, 'parquet' for GeoParquet). Defaults to "tiff".
-            has_cls (bool | None, optional): Whether the model has a CLS token. Defaults to None.
+            has_cls (bool): Whether the model has a CLS token. Defaults to False.
             embedding_pooling (str | None, optional): Pooling method for embeddings. Defaults to None.
         """
-        
-        self.model = model
-        self.model_args = model_args or {}
+        self.output_format = output_format.lower()
+        self._parquet_writer = None
+        self._parquet_path = None
+
+        if self.output_format not in ("tiff", "parquet", "parquet_joint"):
+            raise ValueError(
+                f"Unsupported output format: {self.output_format}. "
+                "Supported formats are 'tiff', 'parquet', 'parquet_joint'."
+            )
+
+        self._config_saved = False
         self.output_path = Path(output_dir)
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.embed_file_key = embed_file_key
-        self.layers = list(layers) if layers is not None else [-1]
-        self.temporal_cfg = temporal_cfg or {}
-        self.output_format = output_format.lower()
         self.has_cls = has_cls
         self.embedding_pooling = embedding_pooling
+        self.embedding_indices = layers
 
-        if self.output_format not in ["tiff", "parquet"]:
-            raise ValueError(f"Unsupported output format: {self.output_format}. Supported formats are 'tiff' and 'parquet'.")
-        
-        if self.embedding_pooling is not None:
-            if self.has_cls is None and self.embedding_pooling.startswith("vit_"):
-                warnings.warn("No 'has_cls' provided; assuming CLS if token count is odd.")
-            if self.output_format == "tiff":
-                warnings.warn("GeoTIFF output not recommended with embedding pooling, saves 1D vectors as (C,1,1).")
-        else:
-            warnings.warn(
-                "GeoTIFF selected; 2D token embeddings (ViT) will be reshaped to "
-                "[C, sqrt(num_tokens), sqrt(num_tokens)] after dropping CLS if present."
+        model_args = model_args or {}
+        if model_args.get("necks", None):
+            logger.info(
+                "EmbeddingGeneration is designed to automatically add necks based on the selected "
+                "output format and aggregation settings. Since necks were provided explicitly, "
+                "automatic neck insertion and embedding aggregation are skipped. "
+                "This may cause incompatibilities with the chosen output format."
             )
+        else:
+            if embedding_pooling in (None, "None", "keep"):
+                model_args["necks"] = [
+                    {
+                        "name": "SelectIndices",
+                        "indices": self.embedding_indices
+                    }
+                ]
+                if output_format == "tiff":
+                    model_args["necks"].append(
+                        {
+                            "name": "ReshapeTokensToImage",
+                            "remove_cls_token": self.has_cls
+                        }
+                    )
+                    logger.info(
+                        "GeoTIFF selected; 2D token embeddings (ViT) will be reshaped to "
+                        "[C, sqrt(num_tokens), sqrt(num_tokens)] after dropping CLS if present."
+                    )
+            elif embedding_pooling in ["mean", "max", "min", "cls"]:
+                model_args["necks"] = [
+                    {
+                        "name": "AggregateTokens",
+                        "pooling": embedding_pooling,
+                        "indices": self.embedding_indices,
+                        "drop_cls": has_cls
+                    }
+                ]
+                if self.output_format == "tiff":
+                    warnings.warn("GeoTIFF output not recommended with embedding pooling, saves 1D vectors as (C,1,1).")
+            else:
+                raise ValueError(f"EmbeddingPooling {embedding_pooling} is not supported.")
 
-        super().__init__()
+        self.model_args = model_args
+        self.aux_heads = []
+        self.model_factory = MODEL_FACTORY_REGISTRY.build("EncoderDecoderFactory")
+        super().__init__(task="embedding_generation")
 
     def infer_BT(self, x: torch.Tensor | dict[str, torch.Tensor]) -> tuple[int, int]:
         """Infer (B, T). For 5D assume [B, C, T, H, W] as standardized by TemporalWrapper."""
@@ -104,55 +145,62 @@ class EmbeddingGenerationTask(BaseTask):
 
         raise TypeError("`file_ids` must be a tensor/ndarray or a (nested) list/tuple")
 
-    def configure_callbacks(self):
-        return []
-    
-    def configure_models(self) -> None:
-        """Instantiate backbone and optional temporal wrapper."""
-        self.model = BACKBONE_REGISTRY.build(
-            self.model,
-            **(self.model_args or {}),
-        )
-        if self.temporal_cfg.get("temporal_wrapper", False):
-            self.model = TemporalWrapper(
-                self.model,
-                pooling=self.temporal_cfg.get("temporal_pooling", "keep"),
-            )
 
-        self.model.eval()
-
-    @torch.no_grad()
-    def get_embeddings(
-        self, 
-        input: torch.Tensor | dict[str, torch.Tensor],
-        layers: list[int]
-    ) -> tuple[list[torch.Tensor], list[int]]:
-        """Run inference on the model and get selected layer outputs.
-
-        Args:
-            input (torch.Tensor | dict[str, torch.Tensor]): Input data to encode, format as expected by model backbone (Tensor or dict for multi-modal inputs).
-            layers (list[int], optional): List of layers to extract embeddings from. Defaults to [-1]. Negative indices wrap around.
-
-        Returns:
-            tuple[list[torch.Tensor], list[int]]: Tuple containing list of embeddings and corresponding layer indices.
+    def save_configuration_summary(
+            self,
+            x: torch.Tensor | dict[str, torch.Tensor],
+    ) -> None:
         """
-        try:
-            outputs = self.model(input)
-        except Exception as e:
-            raise RuntimeError(f"Model inference failed: {e}")
-        
+        Saves a JSON containing model, layer configuration, and output specs.
+        """
+        if self._config_saved:
+            return
+
+        outputs = self.model.encoder(x)
+
         if not isinstance(outputs, list):
             outputs = [outputs]
+        n_outputs = len(outputs)
 
-        n = len(outputs)
-        layers = [l if l >= 0 else n + l for l in layers]
-        for l in layers:
-            if 0 > l or l >= n:
-                raise IndexError(f"Layer index {l} out of bounds for model with {n} layer outputs.")
-        
-        embeddings = [outputs[l] for l in layers]
-        return embeddings, layers
-    
+        resolved_indices = [
+            (idx if idx >= 0 else n_outputs + idx) for idx in self.embedding_indices
+        ]
+
+        total_params = sum(p.numel() for p in self.model.parameters()) / 1e6
+
+        config_summary = {
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "output_dir": str(self.output_path.absolute()),
+            "output_format": self.output_format,
+            "backbone": self.model_args["backbone"] ,
+            "backbone_total_params_million": total_params,
+            "has_cls": self.has_cls,
+            "embedding_pooling": self.embedding_pooling,
+            "model_layer_count": n_outputs,
+            "n_layers_saved": len(self.embedding_indices),
+            "layers": [
+                {   "output_folder_name": f"layer_{i:02d}",
+                    "requested_index": folder,
+                    "layer_number": res + 1,
+                    "layer_output_shape": list(outputs[res][0].shape)
+                }
+                for i, (folder, res) in enumerate(
+                    zip(self.embedding_indices, resolved_indices)
+                )
+            ],
+        }
+
+        out_path = self.output_path / "configuration_summary.json"
+        try:
+            with open(out_path, "w") as f:
+                json.dump(config_summary, f, indent=2)
+            logger.info(f"Configuration summary saved to {out_path}")
+        except IOError as e:
+            logger.error(f"Failed to write configuration summary: {e}")
+
+        self._config_saved = True
+
+
     @torch.no_grad()
     def predict_step(self, batch: dict) -> None:
         embed_file_key = self.embed_file_key
@@ -171,10 +219,19 @@ class EmbeddingGenerationTask(BaseTask):
                 metadata = self.pull_metadata(batch)
 
         self.check_file_ids(file_ids, x)
-        embeddings, layers = self.get_embeddings(x, self.layers)
+        embeddings = self(x)
+        if not isinstance(embeddings, list):
+            embeddings = [embeddings]
 
-        for embedding, layer in zip(embeddings, layers):
-            self.save_embeddings(embedding, file_ids, metadata, layer)
+        self.save_configuration_summary(x)
+        for layer, embeddings_per_layer in enumerate(embeddings):
+            self.save_embeddings(embeddings_per_layer, file_ids, metadata, layer)
+
+    def on_predict_end(self) -> None:
+        writer = getattr(self, "_parquet_writer", None)
+        if writer is not None:
+            writer.close()
+            self._parquet_writer = None
 
     def save_embeddings(
         self,
@@ -184,12 +241,12 @@ class EmbeddingGenerationTask(BaseTask):
         layer: int,
     ) -> None:
         """Save embeddings for a given layer (per sample, optional per timestep and per modality)."""
+        path = self.output_path / f"layer_{layer:02d}"
         if isinstance(embedding, dict):
             for modality, t in embedding.items():
-                path = self.output_path / f"layer_{layer}" / modality
+                path = path / modality
                 self.write_batch(t, file_ids, metadata, path)
         elif isinstance(embedding, torch.Tensor):
-            path = self.output_path / f"layer_{layer}"
             self.write_batch(embedding, file_ids, metadata, path)
         else:
             raise TypeError(f"Unsupported embedding type: {type(embedding)}. Expected Tensor or dict of Tensors.")
@@ -235,7 +292,7 @@ class EmbeddingGenerationTask(BaseTask):
                 metadata[key] = value
         
         return metadata
-      
+
     def write_batch(
             self,
             embedding: torch.Tensor,
@@ -243,96 +300,81 @@ class EmbeddingGenerationTask(BaseTask):
             metadata: dict,
             dir_path: Path,
     ) -> None:  
-        """Write a batch (and optional timesteps) to GeoTIFF/GeoParquet."""
+        """" Write a batch (optionally with timesteps) to GeoTIFF/GeoParquet."""
         dir_path.mkdir(parents=True, exist_ok=True)
 
+        if not file_ids:
+            return
+
+        is_temporal = isinstance(file_ids[0], (list, tuple, np.ndarray))
+        emb_np = embedding.detach().cpu().numpy()
+
+        if self.output_format == "parquet_joint":
+            self.write_parquet_batch(emb_np, file_ids, metadata, is_temporal, dir_path)
+            return
+
+        tasks = list(self.iter_samples(emb_np, file_ids, metadata, is_temporal))
+        if self.output_format == "tiff":
+            writer = self.write_tiff
+        elif self.output_format == "parquet":
+            writer = self.write_parquet
+        else:
+            raise ValueError(f"Unsupported output_format: {self.output_format!r}")
+
+        max_workers = min(len(tasks), getattr(self, "num_workers", 16))
+
+        def write_one(task):
+            arr, filename, meta = task
+            writer(arr, filename, meta, dir_path)
+
+        if max_workers <= 1 or len(tasks) <= 1:
+            for task in tasks:
+                write_one(task)
+            return
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            list(ex.map(write_one, tasks))
+
+    def iter_samples(
+        self,
+        embedding: torch.Tensor,
+        file_ids: list[str],
+        metadata: dict,
+        is_temporal: bool,
+    ) -> iter:
+        """Yields (embedding_np, filename, metadata_sample) tuples."""
         B = len(file_ids)
-        T = len(file_ids[0]) if isinstance(file_ids[0], (list, tuple, np.ndarray)) else None
-    
-        for b in range(B):
-            if T is not None:
+
+        if is_temporal:
+            for b in range(B):
+                T = len(file_ids[b])
                 for t in range(T):
                     filename = file_ids[b][t]
-                    metadata_sample = {k: v[b][t] for k, v in metadata.items()}
-                    embedding_sample = self.pool_embedding(embedding[b, t, ...], self.embedding_pooling, self.has_cls)
-                    if self.output_format == "tiff":
-                        self.write_tiff(embedding_sample, filename, metadata_sample, dir_path)
-                    elif self.output_format == "parquet":
-                        self.write_parquet(embedding_sample, filename, metadata_sample, dir_path)
-            else:
-                filename = file_ids[b]
-                metadata_sample = {k: v[b] for k, v in metadata.items()}
-                embedding_sample = self.pool_embedding(embedding[b, ...], self.embedding_pooling, self.has_cls)
-                if self.output_format == "tiff":
-                    self.write_tiff(embedding_sample, filename, metadata_sample, dir_path)
-                elif self.output_format == "parquet":
-                    self.write_parquet(embedding_sample, filename, metadata_sample, dir_path)
-    
-    def pool_embedding(
-        self,
-        embedding: torch.Tensor,
-        pooling: str | None,
-        has_cls: bool | None,
-    ) -> torch.Tensor:
-        """Apply pooling to embeddings."""
-        if pooling in (None, "None", "keep"):
-            return embedding
-
-        if pooling.startswith("vit_"):
-            if embedding.dim() != 2:
-                raise ValueError(f"Expected 2D embedding for ViT pooling, got {embedding.dim()}D.")
-            if has_cls is None:
-                has_cls = embedding.shape[0] % 2 == 1
-            if has_cls is False and pooling == "vit_cls":
-                raise ValueError("Cannot use 'vit_cls' pooling without a CLS token.")
-            if has_cls is True and pooling != "vit_cls":
-                embedding = embedding[1:, :]
-
-        if pooling.startswith("cnn_") and embedding.dim() != 3:
-            raise ValueError(f"Expected 3D embedding for CNN pooling, got {embedding.dim()}D.")
-
-        if pooling == "vit_mean":
-            return embedding.mean(dim=0)
-        elif pooling == "vit_max":
-            return embedding.max(dim=0).values
-        elif pooling == "vit_min":
-            return embedding.min(dim=0).values
-        elif pooling == "vit_cls":
-            return embedding[0, :]
-        elif pooling == "cnn_mean":
-            return embedding.mean(dim=(1, 2))
-        elif pooling == "cnn_max":
-            return embedding.max(dim=(1, 2)).values
-        elif pooling == "cnn_min":
-            return embedding.min(dim=(1, 2)).values
+                    meta = {k: v[b][t] for k, v in metadata.items()}
+                    arr = embedding[b, t, ...]
+                    yield arr, filename, meta
         else:
-            raise ValueError(f"Unsupported pooling method: {pooling}.")
-        
+            for b in range(B):
+                filename = file_ids[b]
+                meta = {k: v[b] for k, v in metadata.items()}
+                arr = embedding[b, ...]
+                yield arr, filename, meta
+
     def write_tiff(
         self,
-        embedding: torch.Tensor,
+        arr: np.ndarray,
         filename: str,
         metadata: dict,
         dir_path: Path
         ) -> None:
         """Write a single sample to GeoTIFF."""
-        filename = Path(filename).stem  
-        out_path = dir_path / f"{Path(filename)}_embedding.tif"
-        arr = embedding.detach().cpu().numpy()
+        filename = Path(filename).stem
+        out_path = dir_path / f"{filename}_embedding.tif"
 
         if arr.ndim == 1:
             arr = arr.reshape(-1, 1, 1)
-        elif arr.ndim == 2: 
-            n_tokens, dim = arr.shape
-            if self.has_cls is True or (self.has_cls is None and n_tokens % 2 == 1):
-                arr = arr[1:, :]
-                n_tokens -= 1
-            s = int(np.sqrt(n_tokens))
-            if s * s != n_tokens:
-                raise ValueError(f"Cannot reshape {n_tokens} tokens into {s}x{s} grid.")
-            arr = arr.reshape(s, s, dim).transpose(2, 0, 1)
-   
-        with rasterio.open( 
+
+        with rasterio.open(
             out_path,
             "w",
             driver="GTiff",
@@ -346,18 +388,80 @@ class EmbeddingGenerationTask(BaseTask):
 
     def write_parquet(
         self,
-        embedding: torch.Tensor,
+        arr: np.ndarray,
         filename: str,
         metadata: dict,
         dir_path: Path
     ) -> None:
         """Write a single sample to GeoParquet."""
-        filename = Path(filename).stem  
-        out_path = dir_path / f"{Path(filename)}_embedding.parquet"
-        arr = embedding.detach().cpu().numpy()
-
+        filename = Path(filename).stem
+        out_path = dir_path / f"{filename}_embedding.parquet"
         row = {"embedding": arr.tolist()}
         row.update({k: (v.tolist() if v.ndim else v.item()) for k, v in metadata.items()})
 
-        df = gpd.GeoDataFrame([row])  
+        df = gpd.GeoDataFrame([row])
         df.to_parquet(out_path, index=False)
+
+    def close_parquet(self) -> None:
+        if getattr(self, "_parquet_writer", None) is not None:
+            self._parquet_writer.close()
+            self._parquet_writer = None
+            self._parquet_path = None
+
+    def write_parquet_batch(
+            self,
+            emb_np: np.ndarray,
+            file_ids: list[str],
+            metadata: dict,
+            is_temporal: bool,
+            dir_path: Path,
+        ) -> None:
+
+            if is_temporal: # In the case of temporal data, we use 'iter_samples' logic to flatten the temporal and batch dimension
+                tasks = list(self.iter_samples(emb_np, file_ids, metadata, is_temporal))
+                filenames = []
+                emb_list = []
+                meta_cols: dict = {k: [] for k in metadata.keys()}
+
+                for arr, filename, meta in tasks:
+                    filenames.append(Path(filename).stem)
+                    emb_list.append(np.asarray(arr, dtype=np.float32).reshape(-1))
+                    for k, v in meta.items():
+                        meta_cols[k].append(v)
+
+                dim = emb_list[0].shape[0]
+                flat = np.concatenate(emb_list, axis=0)
+                emb_array = pa.FixedSizeListArray.from_arrays(pa.array(flat), dim)
+
+            else: # In the non-temporal case we can directly treat batch dimension as row dimension
+                filenames = file_ids
+                meta_cols = metadata
+                dim = emb_np.shape[1]
+                emb_array = pa.FixedSizeListArray.from_arrays(emb_np.flatten(), dim)
+
+            arrays = {
+                "file_id": pa.array(filenames),
+                "embedding": emb_array,
+            }
+
+            for k, vals in meta_cols.items():
+                norm_vals = []
+                for v in vals:
+                    if hasattr(v, "item"):
+                        norm_vals.append(v.item())
+                    else:
+                        norm_vals.append(v)
+                arrays[k] = pa.array(norm_vals)
+
+            table = pa.table(arrays)
+
+            out_path = dir_path / "embeddings.parquet"
+            if self._parquet_writer is None:
+                self._parquet_path = out_path
+                self._parquet_writer = pq.ParquetWriter(
+                    out_path,
+                    table.schema,
+                    compression="snappy",
+                )
+
+            self._parquet_writer.write_table(table, row_group_size=len(filenames))

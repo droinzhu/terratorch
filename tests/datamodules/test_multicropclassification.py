@@ -14,7 +14,7 @@ def dummy_multitemp_crop_data(tmp_path) -> str:
     valid_chips = data_root / "validation_chips"
     train_chips.mkdir(parents=True, exist_ok=True)
     valid_chips.mkdir(parents=True, exist_ok=True)
-    image_shape = (256, 256, 6)
+    image_shape = (256, 256, 6*3)
     mask_shape = (256, 256)
     train_image_path = train_chips / "chip1_merged.tif"
     train_mask_path = train_chips / "chip1.mask.tif"

@@ -38,10 +38,10 @@ def build_1d_sincos_posemb(max_len, embed_dim=1024, temperature=10000.0):
 
     Returns positional embedding of shape (1, N, D)
     """
-    arange = torch.arange(max_len, dtype=torch.float)  # Shape (N,)
+    arange = torch.arange(max_len, dtype=torch.get_default_dtype())  # Shape (N,)
     assert embed_dim % 2 == 0, "Embed dimension must be divisible by 2 for 1D sin-cos position embedding"
     pos_dim = embed_dim // 2
-    omega = torch.arange(pos_dim, dtype=torch.float) / pos_dim  # Shape (D/2,)
+    omega = torch.arange(pos_dim, dtype=torch.get_default_dtype()) / pos_dim  # Shape (D/2,)
     omega = 1.0 / (temperature**omega)
     out = torch.einsum("n,d->nd", [arange, omega])  # Outer product, shape (N, D/2)
     pos_emb = torch.cat([torch.sin(out), torch.cos(out)], dim=1).unsqueeze(0)  # Shape (1, N, D)
@@ -58,7 +58,7 @@ def build_2d_sincos_posemb(h, w, embed_dim=1024, temperature=10000.0):
     grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing="ij")  # Shapes (W, H)
     assert embed_dim % 4 == 0, "Embed dimension must be divisible by 4 for 2D sin-cos position embedding"
     pos_dim = embed_dim // 4
-    omega = torch.arange(pos_dim, dtype=torch.float) / pos_dim  # Shape (D/4,)
+    omega = torch.arange(pos_dim, dtype=torch.get_default_dtype()) / pos_dim  # Shape (D/4,)
     omega = 1.0 / (temperature**omega)
     out_w = torch.einsum("n,d->nd", [grid_w.reshape(-1), omega])  # Outer product, shape (W*H, D/4)
     out_h = torch.einsum("n,d->nd", [grid_h.reshape(-1), omega])  # Outer product, shape (W*H, D/4)
@@ -153,13 +153,12 @@ class GatedMlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(
-        self, dim, num_heads=8, qkv_bias=False, proj_bias=True, attn_drop=0.0, proj_drop=0.0, allow_zero_attn=False
+        self, dim, num_heads=8, qkv_bias=False, proj_bias=True, attn_drop=0.0, proj_drop=0.0,
     ):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = head_dim**-0.5
-        self.allow_zero_attn = allow_zero_attn
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
@@ -169,21 +168,23 @@ class Attention(nn.Module):
     def forward(self, x, mask=None):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)  # make torchscript happy (cannot use tensor as tuple)
+        q, k, v = qkv.unbind(0)  # (B, num_heads, N, head_dim)
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-
+        # SDPA expects attn_mask broadcastable to (B, num_heads, N, N).
         if mask is not None:
-            mask = mask.unsqueeze(1)  # Unsqueeze attention mask for multi-head
-            attn = attn.masked_fill(mask, -torch.finfo(attn.dtype).max)
-
-        if self.allow_zero_attn:
-            attn = softmax1(attn)
+            # In TerraMind: True = "do not attend" -> PyTorch: True = model *should* attend -> invert
+            attn_mask = ~mask[:, None, :, :].to(dtype=torch.bool, device=x.device)
         else:
-            attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
+            attn_mask = None
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
+            scale=self.scale,
+        )
+
+        x = y.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -191,13 +192,12 @@ class Attention(nn.Module):
 
 class CrossAttention(nn.Module):
     def __init__(
-        self, dim, num_heads=8, qkv_bias=False, proj_bias=True, attn_drop=0.0, proj_drop=0.0, allow_zero_attn=False
+        self, dim, num_heads=8, qkv_bias=False, proj_bias=True, attn_drop=0.0, proj_drop=0.0,
     ):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = head_dim**-0.5
-        self.allow_zero_attn = allow_zero_attn
 
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
@@ -210,22 +210,30 @@ class CrossAttention(nn.Module):
         B, N, C = x.shape
         _, M, _ = context.shape
 
-        q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # (B, H, N, Dh)
         kv = self.kv(context).reshape(B, M, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        k, v = kv[0], kv[1]
+        k, v = kv[0], kv[1]  # (B, H, M, Dh)
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
+
         if mask is not None:
-            mask = rearrange(mask, "b n m -> b 1 n m")  # Unsqueeze / reshape for multi-head
-            attn = attn.masked_fill(mask, -torch.finfo(attn.dtype).max)
-
-        if self.allow_zero_attn:
-            attn = softmax1(attn)
+            # In TerraMind: True = "do not attend" -> PyTorch: True = model *should* attend -> invert
+            if mask.dim() == 2:  # (B, M) key-padding mask
+                attn_mask = ~mask[:, None, None, :].to(dtype=torch.bool, device=x.device)
+            elif mask.dim() == 3:  # (B, N, M) attention mask
+                attn_mask = ~mask[:, None, :, :].to(dtype=torch.bool, device=x.device)
+            else:
+                raise ValueError("mask must be (B, M) or (B, N, M) with True = 'do not attend'")
         else:
-            attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
+            attn_mask = None
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
+            scale=self.scale,
+        )
+
+        x = y.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -368,7 +376,6 @@ class Block(nn.Module):
                 proj_bias=proj_bias,
                 attn_drop=attn_drop,
                 proj_drop=drop,
-                allow_zero_attn=allow_zero_attn,
             )
         else:
             self.attn = NormAttention(
@@ -428,7 +435,6 @@ class DecoderBlock(nn.Module):
                 proj_bias=proj_bias,
                 attn_drop=attn_drop,
                 proj_drop=drop,
-                allow_zero_attn=allow_zero_attn,
             )
             self.cross_attn = CrossAttention(
                 dim,
@@ -437,7 +443,6 @@ class DecoderBlock(nn.Module):
                 proj_bias=proj_bias,
                 attn_drop=attn_drop,
                 proj_drop=drop,
-                allow_zero_attn=allow_zero_attn,
             )
         else:
             self.self_attn = NormAttention(

@@ -43,6 +43,7 @@ def test_chesapeake_datamodule(dummy_chesapeake_data):
     datamodule = MChesapeakeLandcoverNonGeoDataModule(
         data_root=dummy_chesapeake_data,
         bands=bands,
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

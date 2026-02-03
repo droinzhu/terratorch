@@ -7,32 +7,33 @@ trainer:
   num_nodes: 1
   precision: 16-mixed
   logger: true
-  max_epochs: 1
-               
+
   callbacks:
-    - class_path: RichProgressBar
-    - class_path: LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: epoch
+
     # ---- Early stop if ----
-    - class_path: EarlyStopping
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val/loss
         patience: 20
-     # ---- Early stop endif ----
-    - class_path: ModelCheckpoint
+    # ---- Early stop endif ----
+
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: /dccstor/terratorch/tmp/swinl/
         mode: min
         monitor: val/loss
         filename: best-state_dict-{epoch:02d}
         save_weights_only: True
-      
+
   max_epochs: 2
   check_val_every_n_epoch: 1
   log_every_n_steps: 50
   enable_checkpointing: true
   default_root_dir: /dccstor/terratorch/tmp/swinl/
+
 
 data:
   class_path: terratorch.datamodules.GenericNonGeoSegmentationDataModule
@@ -99,7 +100,7 @@ data:
 
     # if backbone is prithvi-EO-v2
     test_transform:
-      - class_path: ToTensorV2
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
 model:
   class_path: terratorch.tasks.SemanticSegmentationTask
   init_args:
@@ -157,6 +158,6 @@ optimizer:
     weight_decay: 0.05
     # ---- Optimizer stop if ----
 lr_scheduler:
-  class_path: ReduceLROnPlateau
+  class_path: lightning.pytorch.cli.ReduceLROnPlateau
   init_args:
     monitor: val/loss

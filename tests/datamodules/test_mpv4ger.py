@@ -36,6 +36,7 @@ def test_mpv4ger_datamodule(dummy_mpv4ger_data):
     datamodule = MPv4gerNonGeoDataModule(
         data_root=dummy_mpv4ger_data,
         bands=bands,
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

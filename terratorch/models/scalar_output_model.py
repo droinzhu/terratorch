@@ -4,9 +4,9 @@ import torch
 from segmentation_models_pytorch.base import SegmentationModel
 from torch import nn
 import torchvision.transforms as transforms
-from terratorch.models.heads import ClassificationHead
+from terratorch.models.heads import ScalarHead 
 from terratorch.models.model import AuxiliaryHeadWithDecoderWithoutInstantiatedHead, Model, ModelOutput
-from terratorch.models.utils import pad_images
+from terratorch.models.utils import pad_images, get_image_size
 import pdb
 
 
@@ -27,8 +27,8 @@ class ScalarOutputModel(Model, SegmentationModel):
         encoder: nn.Module,
         decoder: nn.Module,
         head_kwargs: dict,
-        patch_size: int = None,
-        padding: str = None,
+        patch_size: int | list[int] | None = None,
+        padding: str = "reflect",
         decoder_includes_head: bool = False,
         auxiliary_heads: list[AuxiliaryHeadWithDecoderWithoutInstantiatedHead] | None = None,
         neck: nn.Module | None = None,
@@ -36,7 +36,7 @@ class ScalarOutputModel(Model, SegmentationModel):
         """Constructor
 
         Args:
-            task (str): Task to be performed. Must be "classification".
+            task (str): Task to be performed. Must be "classification" or "scalar_regression".
             encoder (nn.Module): Encoder to be used
             decoder (nn.Module): Decoder to be used
             head_kwargs (dict): Arguments to be passed at instantiation of the head.
@@ -45,6 +45,8 @@ class ScalarOutputModel(Model, SegmentationModel):
                 AuxiliaryHeads with heads to be instantiated. Defaults to None.
             neck (nn.Module | None): Module applied between backbone and decoder.
                 Defaults to None, which applies the identity.
+            patch_size (int, list[int] | None): Patch size used for automated padding of images. Defaults to None.
+            padding (str): Padding method, defaults to "reflect".
         """
         super().__init__()
         self.task = task
@@ -91,25 +93,15 @@ class ScalarOutputModel(Model, SegmentationModel):
     def forward(self, x: torch.Tensor, **kwargs) -> ModelOutput:
         """Sequentially pass `x` through model`s encoder, decoder and heads"""
 
-        if isinstance(x, torch.Tensor):
-            if self.patch_size:
-                # Only works for single image modalities
-                x = pad_images(x, self.patch_size, self.padding)
-            input_size = x.shape[-2:]
-        elif isinstance(x, dict):
-            # Multimodal input in passed as dict (Assuming first modality to be an image)
-            input_size = list(x.values())[0].shape[-2:]
-        elif hasattr(kwargs, 'image_size'):
-            input_size = kwargs['image_size']
-        else:
-            ValueError('Could not infer image shape.')
-
+        if self.patch_size and self.padding is not None:
+            x = pad_images(x, self.patch_size, self.padding)
+        input_size = get_image_size(x)
         features = self.encoder(x, **kwargs)
 
         features = self.neck(features, image_size=input_size)
 
         decoder_output = self.decoder([f.clone() for f in features])
-        mask = self.head(decoder_output)
+        mask = self.head(decoder_output)  # in case of regression mask --> label
 
         aux_outputs = {}
         for name, decoder in self.aux_heads.items():
@@ -119,10 +111,12 @@ class ScalarOutputModel(Model, SegmentationModel):
         return ModelOutput(output=mask, auxiliary_heads=aux_outputs)
 
     def _get_head(self, task: str, input_embed_dim: int, head_kwargs: dict):
-        if task == "classification":
-            if "num_classes" not in head_kwargs:
-                msg = "num_classes must be defined for classification task"
-                raise Exception(msg)
-            return ClassificationHead(input_embed_dim, **head_kwargs)
-        msg = "Task must be classification."
-        raise Exception(msg)
+        if task not in ["classification", 'scalar_regression']:
+            msg = "Task must be `classification` or `scalar_regression`."
+            raise Exception(msg)
+        
+        if task == "classification" and "num_classes" not in head_kwargs:
+            msg = f"`num_classes` must be defined for classification task."
+            raise Exception(msg)
+            
+        return ScalarHead(input_embed_dim, **head_kwargs)

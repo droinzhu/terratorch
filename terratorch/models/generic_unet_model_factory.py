@@ -13,7 +13,6 @@ from torch import nn
 from terratorch.models.model import Model, ModelFactory, ModelOutput
 from terratorch.models.utils import extract_prefix_keys
 from terratorch.registry import MODEL_FACTORY_REGISTRY
-from terratorch.tasks.segmentation_tasks import to_segmentation_prediction
 
 
 def freeze_module(module: nn.Module):

@@ -7,7 +7,9 @@ from einops import rearrange
 import albumentations as A
 import kornia.augmentation as K
 from kornia.augmentation._2d.geometric.base import GeometricAugmentationBase2D
+from torch import nn
 from typing import Union, Dict
+import numpy as np
 
 N_DIMS_FOR_TEMPORAL = 4
 N_DIMS_FLATTENED_TEMPORAL = 3
@@ -37,7 +39,7 @@ def kornia_augmentations_to_callable_with_dict(augmentations: list[Union[Geometr
     return fn
 
 
-def albumentations_to_callable_with_dict(albumentation: list[BasicTransform] | None = None):
+def albumentations_to_callable_with_dict(albumentation: list | None = None):
     if albumentation is None:
         return lambda x: x
     albumentation = Compose(albumentation)
@@ -290,6 +292,27 @@ def default_non_image_transform(array):
         return array
 
 
+class MultimodalToTensor:
+    def __init__(self, modalities):
+        self.modalities = modalities
+
+    def __call__(self, d):
+        new_dict = {}
+        for k, v in d.items():
+            if not isinstance(v, np.ndarray):
+                new_dict[k] = v
+            else:
+                if k in self.modalities and len(v.shape) >= 3:  # Assuming raster modalities with 3+ dimensions
+                    if len(v.shape) <= 4:
+                        v = np.moveaxis(v, -1, 0)  # C, H, W or C, T, H, W
+                    elif len(v.shape) == 5:
+                        v = np.moveaxis(v, -1, 1)  # B, C, T, H, W
+                    else:
+                        raise ValueError(f"Unexpected shape for {k}: {v.shape}")
+                new_dict[k] = torch.from_numpy(v)
+        return new_dict
+
+
 class MultimodalTransforms:
     """
     MultimodalTransforms applies albumentations transforms to multiple image modalities.
@@ -315,7 +338,7 @@ class MultimodalTransforms:
         """
         self.transforms = transforms
         self.shared = shared
-        self.non_image_modalities = non_image_modalities
+        self.non_image_modalities = non_image_modalities if non_image_modalities is not None else []
         self.non_image_transform = non_image_transform or default_non_image_transform
 
     def __call__(self, data: dict):
@@ -333,6 +356,24 @@ class MultimodalTransforms:
         else:
             # Applies transformations for each modality separate
             for key, value in data.items():
-                data[key] = self.transforms[key](image=value)['image']  # Only works with image modalities
+                if key in self.transforms:
+                    if key in self.non_image_modalities:
+                        raise NotImplementedError("Non image modalities not implemented.")
+                    else:
+                        data[key] = self.transforms[key](image=value)['image']
 
         return data
+
+    
+class AddConstantToLabels(nn.Module):
+    def __init__(self, label_key = 'label', constant=1):
+        super().__init__()
+        self.label_key = label_key
+        self.constant = constant
+
+    def forward(self, sample):
+        # Assumes sample is a dict with a 'label' key
+        # and that sample['label'] is a torch.Tensor
+        sample = sample.copy()  # To avoid modifying the original sample
+        sample[self.label_key] = sample[self.label_key] + self.constant 
+        return sample

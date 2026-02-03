@@ -389,13 +389,26 @@ class BioMasstersNonGeo(BioMassters):
 
     def _random_subsample(self):
         if self.split == "train" and self.subset < 1.0:
-            num_samples = int(len(self.df["num_index"].unique()) * self.subset)
+            
             if self.seed is not None:
                 random.seed(self.seed)
-            selected_indices = random.sample(
-                list(self.df["num_index"].unique()), num_samples
-            )
-            self.df = self.df[self.df["num_index"].isin(selected_indices)]
+
+            if self.as_time_series:
+                # One sequence per chip
+                unique_groups = self.df["chip_id"].unique()
+            else:
+                # One sample per (chip_id, month)
+                unique_groups = self.df.drop_duplicates(["chip_id", "month"])[["chip_id", "month"]]
+
+            num_samples = int(len(unique_groups) * self.subset)
+
+            if self.as_time_series:
+                selected = set(random.sample(list(unique_groups), num_samples))
+                self.df = self.df[self.df["chip_id"].isin(selected)]
+            else:
+                selected_rows = unique_groups.sample(n=num_samples, random_state=self.seed)
+                self.df = self.df.merge(selected_rows, on=["chip_id", "month"])
+
             self.df.reset_index(drop=True, inplace=True)
 
     def plot(

@@ -5,28 +5,32 @@ trainer:
   devices: auto
   num_nodes: 1
   precision: 16-mixed
+
   callbacks:
-    - class_path: RichProgressBar
-    - class_path: LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: epoch
-    - class_path: ModelCheckpoint
+
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         mode: min
         monitor: val/loss
         filename: best-state_dict-{epoch:02d}
         dirpath: /dccstor/terratorch/tmp/timm_resnet34/
         save_weights_only: true
-    - class_path: EarlyStopping
+
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val/loss
         patience: 20
+
   max_epochs: 2
   check_val_every_n_epoch: 1
   log_every_n_steps: 5
   enable_checkpointing: true
   default_root_dir: /dccstor/terratorch/tmp/timm_resnet34/
   logger: true
+
 
 data:
   # Tested with buildings data. Not available in ccc
@@ -71,11 +75,11 @@ data:
     num_classes: 2
     train_transform:
       - class_path: albumentations.D4
-      - class_path: ToTensorV2
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
     val_transform:
-      - class_path: ToTensorV2
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
     test_transform:
-      - class_path: ToTensorV2
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
 model:
   class_path: terratorch.tasks.SemanticSegmentationTask
   init_args:
@@ -83,7 +87,7 @@ model:
     model_args:
       backbone: timm_resnet34
       num_classes: 2
-      backbone_pretrained: true
+      backbone_pretrained: false
       necks:
         - name: SelectIndices
           indices:
@@ -117,6 +121,6 @@ optimizer:
     lr: 5.0e-05
     weight_decay: 0.05
 lr_scheduler:
-  class_path: ReduceLROnPlateau
+  class_path: lightning.pytorch.cli.ReduceLROnPlateau
   init_args:
     monitor: val/loss

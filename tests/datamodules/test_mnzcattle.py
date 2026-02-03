@@ -38,6 +38,7 @@ def test_nzcattle_datamodule(dummy_nzcattle_data):
     datamodule = MNzCattleNonGeoDataModule(
         data_root=dummy_nzcattle_data,
         bands=bands,
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

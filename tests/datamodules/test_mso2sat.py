@@ -38,6 +38,7 @@ def test_msosat_datamodule(dummy_msosat_data):
         data_root=dummy_msosat_data,
         bands=bands,
         partition="default",
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

@@ -36,6 +36,7 @@ def test_openearthmap_datamodule(dummy_openearth_data):
 
     datamodule = OpenEarthMapNonGeoDataModule(
         data_root=str(dummy_openearth_data),
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

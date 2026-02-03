@@ -18,7 +18,7 @@ from torch import Tensor
 from torchgeo.datasets import NonGeoDataset
 from xarray import DataArray
 
-from terratorch.datasets.utils import clip_image, default_transform, filter_valid_files, validate_bands
+from terratorch.datasets.utils import default_transform, filter_valid_files, validate_bands, to_rgb
 
 
 class MultiTemporalCropClassification(NonGeoDataset):
@@ -188,7 +188,7 @@ class MultiTemporalCropClassification(NonGeoDataset):
         # to channels last
         image = image.to_numpy()
         if self.expand_temporal_dimension:
-            image = rearrange(image, "(channels time) h w -> channels time h w", channels=len(self.bands))
+            image = rearrange(image, "(time channels) h w -> channels time h w", channels=len(self.bands))
         image = np.moveaxis(image, 0, -1)
 
         # filter bands
@@ -240,10 +240,9 @@ class MultiTemporalCropClassification(NonGeoDataset):
 
         processed_images = []
         for t in range(self.time_steps):
-            img = images[t]
-            img = img.permute(1, 2, 0)
+            img = images[:,t]
             img = img.numpy()
-            img = clip_image(img)
+            img = to_rgb(img, rgb_indices, gamma=0.9)
             processed_images.append(img)
 
         mask = sample["mask"].numpy()

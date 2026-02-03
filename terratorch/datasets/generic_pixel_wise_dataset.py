@@ -18,11 +18,14 @@ from einops import rearrange
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+import torch
 from torch import Tensor
 from torchgeo.datasets import NonGeoDataset
+import warnings
+from rasterio.errors import NotGeoreferencedWarning
 
 from terratorch.datasets.utils import HLSBands, default_transform, filter_valid_files, generate_bands_intervals
-
+from terratorch.datasets.utils import to_rgb, to_pca_rgb, resize_hwc
 
 class GenericPixelWiseDataset(NonGeoDataset, ABC):
     """
@@ -46,7 +49,10 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         transform: A.Compose | None = None,
         no_data_replace: float | None = None,
         no_label_replace: int | None = None,
+        embedding_input: bool = False,
+        pca_step: int = 4,
         expand_temporal_dimension: bool = False,
+        temporal_channel_major: bool = False,
         reduce_zero_label: bool = False,
     ) -> None:
         """Constructor
@@ -79,8 +85,13 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
                 Defaults to None, which simply applies ToTensorV2().
             no_data_replace (float | None): Replace nan values in input images with this value. If none, does no replacement. Defaults to None.
             no_label_replace (int | None): Replace nan values in label with this value. If none, does no replacement. Defaults to -1.
+            embedding_input (bool): Whether the input represents embeddings rather than an image, used for plotting. Defaults to False.
+            pca_step (int): Spatial subsampling factor for PCA fitting in embedding visualizations.
+                PCA components are estimated using only every pca_step-th spatial embedding
+                (e.g. pca_step=4 uses 1/4 of embeddings), then applied to all embeddings. Defaults to 4.
             expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
-                Defaults to False.
+                Defaults to False. Assumes bands are grouped by time (all bands of one timestep are stacked together), otherwise set temporal_channel_major=True.
+            temporal_channel_major: Used for expand_temporal_dimension, set True if bands are grouped by channel (all timesteps of one band are stacked together).
             reduce_zero_label (bool): Subtract 1 from all labels. Useful when labels start from 1 instead of the
                 expected 0. Defaults to False.
         """
@@ -96,10 +107,21 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         self.segmentation_mask_files = sorted(glob.glob(os.path.join(label_data_root, label_grep)))
         self.reduce_zero_label = reduce_zero_label
         self.expand_temporal_dimension = expand_temporal_dimension
+        self.temporal_channel_major = temporal_channel_major
 
-        if self.expand_temporal_dimension and output_bands is None:
-            msg = "Please provide output_bands when expand_temporal_dimension is True"
-            raise Exception(msg)
+        if self.expand_temporal_dimension:
+            if not self.temporal_channel_major:
+                warnings.warn(
+                    "expand_temporal_dimension=True assumes bands are grouped by time "
+                    "(all bands of one timestep are stacked together). "
+                    "If instead bands are grouped by channel "
+                    "(all timesteps of one band are stacked together), "
+                    "set temporal_channel_major=True.")
+
+            if dataset_bands is None:
+                raise ValueError(
+                    "Please provide dataset_bands when expand_temporal_dimension=True."
+                )
         if self.split_file is not None:
             with open(self.split_file) as f:
                 split = f.readlines()
@@ -129,6 +151,8 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
 
         self.dataset_bands = generate_bands_intervals(dataset_bands)
         self.output_bands = generate_bands_intervals(output_bands)
+        self.embedding_input = embedding_input
+        self.pca_step = pca_step
 
         if self.output_bands and not self.dataset_bands:
             msg = "If output bands provided, dataset_bands must also be provided"
@@ -149,11 +173,7 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         self.transform = transform if transform else default_transform
         # self.transform = transform if transform else ToTensorV2()
 
-        import warnings
-
-        import rasterio
-
-        warnings.filterwarnings("ignore", category=rasterio.errors.NotGeoreferencedWarning)
+        warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
     def __len__(self) -> int:
         return len(self.image_files)
@@ -162,9 +182,11 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         image = self._load_file(self.image_files[index], nan_replace=self.no_data_replace).to_numpy()
         # to channels last
         if self.expand_temporal_dimension:
-            image = rearrange(image, "(channels time) h w -> channels time h w", channels=len(self.output_bands))
+            if self.temporal_channel_major:
+                image = rearrange(image, "(channels time) h w -> channels time h w", channels=len(self.dataset_bands))
+            else:
+                image = rearrange(image, "(time channels) h w -> channels time h w", channels=len(self.dataset_bands))
         image = np.moveaxis(image, 0, -1)
-
         if self.filter_indices:
             image = image[..., self.filter_indices]
         output = {
@@ -182,11 +204,91 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         return output
 
     def _load_file(self, path, nan_replace: int | float | None = None) -> xr.DataArray:
+        #warnings.filterwarnings("ignore", category=NotGeoreferencedWarning) #TODO Handle NotGeoreferencedWarning better
         data = rioxarray.open_rasterio(path, masked=True)
         if nan_replace is not None:
             data = data.fillna(nan_replace)
         return data
 
+    def plot(
+            self,
+            sample: dict[str, Tensor],
+            suptitle: str | None = None,
+            show_axes: bool = False,
+            embedding_input: bool | None = None,
+            pca_step:int | None = None
+    ) -> Figure:
+        """Plot a sample from the dataset.
+
+        Args:
+            sample: A sample returned by :meth:`__getitem__`.
+            suptitle: Optional string to use as a suptitle.
+            show_axes: Whether to show axes.
+            embedding_input: Whether the input represents embedding rather than an image.
+                If ``True``, embedding is visualized as a 3-channel PCA image and resized
+                to match the spatial shape of the target or prediction. If ``None``, the
+                value configured at dataset initialization is used.
+            pca_step: Spatial downsampling factor used when fitting PCA on embeddings.
+                Larger values increase efficiency at the cost of stability. If ``None``,
+                the value configured at dataset initialization is used.
+
+        .. versionadded:: 0.2
+        """
+
+        image = sample["image"]
+        embedding_input = self.embedding_input if embedding_input is None else embedding_input
+        pca_step = self.pca_step if pca_step is None else pca_step
+
+        if len(image.shape) == 5:
+            return
+        if len(image.shape) == 4:
+            image = torch.squeeze(image[:, -1, :, :], 1)
+        if isinstance(image, Tensor):
+            image = image.detach().cpu().numpy()
+
+        label_mask = sample["mask"]
+        if isinstance(label_mask, Tensor):
+            label_mask = label_mask.detach().cpu().numpy()
+
+        if embedding_input:
+            if image.ndim == 2:
+                warnings.warn(
+                    "Embedding plotting is only supported for spatially arranged embeddings. "
+                    "For example, in TerraTorch you can use a spatial output format such as TIFF, "
+                    "or add a ReshapeTokensToImage neck during Embedding Generation."
+                )
+                return  # Plotting requires (reshaped) spatial (C, H, W) input embeddings.
+
+            image_for_plot, H_emb, W_emb = to_pca_rgb(image_chw =image, step=pca_step) # Get 3-channel PCA image
+            target_h, target_w = label_mask.shape[-2], label_mask.shape[-1]
+
+            if (H_emb, W_emb) != (target_h, target_w):
+                image_for_plot = resize_hwc(image_for_plot, (target_h, target_w)) # Resize to target size
+
+        else:
+            image_for_plot = to_rgb(image_chw = image, rgb_indices = self.rgb_indices)
+
+        showing_predictions = "prediction" in sample
+        prediction_mask = None
+        if showing_predictions:
+            prediction_mask = sample["prediction"]
+            if isinstance(prediction_mask, Tensor):
+                prediction_mask = prediction_mask.detach().cpu().numpy()
+
+        kwargs = {}
+        if hasattr(self, "num_classes"):
+            kwargs["num_classes"] = self.num_classes
+            kwargs["class_names"] = getattr(self, "class_names", None)
+
+        return self._plot_sample(
+            image=image_for_plot,
+            label=label_mask,
+            prediction=prediction_mask,
+            suptitle=suptitle,
+            show_axes=show_axes,
+            embedding_input= embedding_input,
+            **kwargs,
+        )
 
 class GenericNonGeoSegmentationDataset(GenericPixelWiseDataset):
     """GenericNonGeoSegmentationDataset"""
@@ -209,46 +311,18 @@ class GenericNonGeoSegmentationDataset(GenericPixelWiseDataset):
         transform: A.Compose | None = None,
         no_data_replace: float | None = None,
         no_label_replace: int | None = None,
+        embedding_input: bool = False,
+        pca_step: int = 4,
         expand_temporal_dimension: bool = False,
         reduce_zero_label: bool = False,
     ) -> None:
-        """Constructor
+        """See :class:`GenericPixelWiseDataset` for shared args.
 
-        Args:
-            data_root (Path): Path to data root directory
+        Adds:
             num_classes (int): Number of classes in the dataset
-            label_data_root (Path, optional): Path to data root directory with labels.
-                If not specified, will use the same as for images.
-            image_grep (str, optional): Regular expression appended to data_root to find input images.
-                Defaults to "*".
-            label_grep (str, optional): Regular expression appended to data_root to find ground truth masks.
-                Defaults to "*".
-            split (Path, optional): Path to file containing files to be used for this split.
-                The file should be a new-line separated prefixes contained in the desired files.
-                Files will be seached using glob with the form Path(data_root).glob(prefix + [image or label grep])
-            ignore_split_file_extensions (bool, optional): Whether to disregard extensions when using the split
-                file to determine which files to include in the dataset.
-                E.g. necessary for Eurosat, since the split files specify ".jpg" but files are
-                actually ".jpg". Defaults to True
-            allow_substring_split_file (bool, optional): Whether the split files contain substrings
-                that must be present in file names to be included (as in mmsegmentation), or exact
-                matches (e.g. eurosat). Defaults to True.
-            rgb_indices (list[str], optional): Indices of RGB channels. Defaults to [0, 1, 2].
-            dataset_bands (list[HLSBands | int] | None): Bands present in the dataset.
-            output_bands (list[HLSBands | int] | None): Bands that should be output by the dataset.
             class_names (list[str], optional): Class names. Defaults to None.
-            constant_scale (float): Factor to multiply image values by. Defaults to 1.
-            transform (Albumentations.Compose | None): Albumentations transform to be applied.
-                Should end with ToTensorV2(). If used through the generic_data_module,
-                should not include normalization. Not supported for multi-temporal data.
-                Defaults to None, which simply applies ToTensorV2().
-            no_data_replace (float | None): Replace nan values in input images with this value. If none, does no replacement. Defaults to None.
-            no_label_replace (int | None): Replace nan values in label with this value. If none, does no replacement. Defaults to None.
-            expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
-                Defaults to False.
-            reduce_zero_label (bool): Subtract 1 from all labels. Useful when labels start from 1 instead of the
-                expected 0. Defaults to False.
         """
+
         super().__init__(
             data_root,
             label_data_root=label_data_root,
@@ -264,6 +338,8 @@ class GenericNonGeoSegmentationDataset(GenericPixelWiseDataset):
             transform=transform,
             no_data_replace=no_data_replace,
             no_label_replace=no_label_replace,
+            embedding_input=embedding_input,
+            pca_step=pca_step,
             expand_temporal_dimension=expand_temporal_dimension,
             reduce_zero_label=reduce_zero_label,
         )
@@ -276,51 +352,9 @@ class GenericNonGeoSegmentationDataset(GenericPixelWiseDataset):
             item["mask"] = item["mask"].long()
         return item
 
-    def plot(self, sample: dict[str, Tensor], suptitle: str | None = None, show_axes: bool | None = False) -> Figure:
-        """Plot a sample from the dataset.
-
-        Args:
-            sample: a sample returned by :meth:`__getitem__`
-            suptitle: optional string to use as a suptitle
-            show_axes: whether to show axes or not
-
-        Returns:
-            a matplotlib Figure with the rendered sample
-
-        .. versionadded:: 0.2
-        """
-        image = sample["image"]
-        if len(image.shape) == 5:
-            return
-        if isinstance(image, Tensor):
-            image = image.numpy()
-        image = image.take(self.rgb_indices, axis=0)
-        image = np.transpose(image, (1, 2, 0))
-        image = (image - image.min(axis=(0, 1))) * (1 / image.max(axis=(0, 1)))
-        image = np.clip(image, 0, 1)
-
-        label_mask = sample["mask"]
-        if isinstance(label_mask, Tensor):
-            label_mask = label_mask.numpy()
-
-        showing_predictions = "prediction" in sample
-        if showing_predictions:
-            prediction_mask = sample["prediction"]
-            if isinstance(prediction_mask, Tensor):
-                prediction_mask = prediction_mask.numpy()
-
-        return self._plot_sample(
-            image,
-            label_mask,
-            self.num_classes,
-            prediction=prediction_mask if showing_predictions else None,
-            suptitle=suptitle,
-            class_names=self.class_names,
-            show_axes=show_axes,
-        )
 
     @staticmethod
-    def _plot_sample(image, label, num_classes, prediction=None, suptitle=None, class_names=None, show_axes=False):
+    def _plot_sample(image, label, num_classes: int, prediction=None, suptitle=None, class_names=None, show_axes=False, embedding_input=False):
         num_images = 5 if prediction is not None else 4
         fig, ax = plt.subplots(1, num_images, figsize=(12, 10), layout="compressed")
         axes_visibility = "on" if show_axes else "off"
@@ -330,7 +364,7 @@ class GenericNonGeoSegmentationDataset(GenericPixelWiseDataset):
 
         norm = mpl.colors.Normalize(vmin=0, vmax=num_classes - 1)
         ax[1].axis(axes_visibility)
-        ax[1].title.set_text("Image")
+        ax[1].set_title("Embedding PCA" if embedding_input else "RGB Image")
         ax[1].imshow(image)
 
         ax[2].axis(axes_visibility)
@@ -340,7 +374,7 @@ class GenericNonGeoSegmentationDataset(GenericPixelWiseDataset):
         ax[3].axis(axes_visibility)
         ax[3].title.set_text("GT Mask on Image")
         ax[3].imshow(image)
-        ax[3].imshow(label, cmap="jet", alpha=0.3, norm=norm)
+        ax[3].imshow(label, cmap="jet", alpha=0.5 if embedding_input else 0.4, norm=norm)
 
         if prediction is not None:
             ax[4].axis(axes_visibility)
@@ -380,43 +414,12 @@ class GenericNonGeoPixelwiseRegressionDataset(GenericPixelWiseDataset):
         transform: A.Compose | None = None,
         no_data_replace: float | None = None,
         no_label_replace: int | None = None,
+        embedding_input: bool = False,
+        pca_step: int = 4,
         expand_temporal_dimension: bool = False,
         reduce_zero_label: bool = False,
     ) -> None:
-        """Constructor
-
-        Args:
-            data_root (Path): Path to data root directory
-            label_data_root (Path, optional): Path to data root directory with labels.
-                If not specified, will use the same as for images.
-            image_grep (str, optional): Regular expression appended to data_root to find input images.
-                Defaults to "*".
-            label_grep (str, optional): Regular expression appended to data_root to find ground truth masks.
-                Defaults to "*".
-            split (Path, optional): Path to file containing files to be used for this split.
-                The file should be a new-line separated prefixes contained in the desired files.
-                Files will be seached using glob with the form Path(data_root).glob(prefix + [image or label grep])
-            ignore_split_file_extensions (bool, optional): Whether to disregard extensions when using the split
-                file to determine which files to include in the dataset.
-                E.g. necessary for Eurosat, since the split files specify ".jpg" but files are
-                actually ".jpg". Defaults to True.
-            allow_substring_split_file (bool, optional): Whether the split files contain substrings
-                that must be present in file names to be included (as in mmsegmentation), or exact
-                matches (e.g. eurosat). Defaults to True.
-            rgb_indices (list[str], optional): Indices of RGB channels. Defaults to [0, 1, 2].
-            dataset_bands (list[HLSBands | int] | None): Bands present in the dataset.
-            output_bands (list[HLSBands | int] | None): Bands that should be output by the dataset.
-            constant_scale (float): Factor to multiply image values by. Defaults to 1.
-            transform (Albumentations.Compose | None): Albumentations transform to be applied.
-                Should end with ToTensorV2(). If used through the generic_data_module,
-                should not include normalization. Not supported for multi-temporal data.
-                Defaults to None, which simply applies ToTensorV2().
-            no_data_replace (float | None): Replace nan values in input images with this value. If none, does no replacement. Defaults to None.
-            no_label_replace (int | None): Replace nan values in label with this value. If none, does no replacement. Defaults to None.
-            expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
-                Defaults to False.
-            reduce_zero_label (bool): Subtract 1 from all labels. Useful when labels start from 1 instead of the
-                expected 0. Defaults to False.
+        """See :class:`GenericPixelWiseDataset` for args.
         """
         super().__init__(
             data_root,
@@ -433,6 +436,8 @@ class GenericNonGeoPixelwiseRegressionDataset(GenericPixelWiseDataset):
             transform=transform,
             no_data_replace=no_data_replace,
             no_label_replace=no_label_replace,
+            embedding_input=embedding_input,
+            pca_step=pca_step,
             expand_temporal_dimension=expand_temporal_dimension,
             reduce_zero_label=reduce_zero_label,
         )
@@ -443,56 +448,16 @@ class GenericNonGeoPixelwiseRegressionDataset(GenericPixelWiseDataset):
             item["mask"] = item["mask"].float()
         return item
 
-    def plot(self, sample: dict[str, Tensor], suptitle: str | None = None, show_axes: bool | None = False) -> Figure:
-        """Plot a sample from the dataset.
-
-        Args:
-            sample (dict[str, Tensor]): a sample returned by :meth:`__getitem__`
-            suptitle (str|None): optional string to use as a suptitle
-            show_axes (bool|None): whether to show axes or not
-
-        Returns:
-            a matplotlib Figure with the rendered sample
-
-        .. versionadded:: 0.2
-        """
-        image = sample["image"]
-        if len(image.shape) == 5:
-            return
-        if isinstance(image, Tensor):
-            image = image.numpy()
-        image = image.take(self.rgb_indices, axis=0)
-        image = np.transpose(image, (1, 2, 0))
-        image = (image - image.min(axis=(0, 1))) * (1 / image.max(axis=(0, 1)))
-        image = np.clip(image, 0, 1)
-
-        label_mask = sample["mask"]
-        if isinstance(label_mask, Tensor):
-            label_mask = label_mask.numpy()
-
-        showing_predictions = "prediction" in sample
-        if showing_predictions:
-            prediction_mask = sample["prediction"]
-            if isinstance(prediction_mask, Tensor):
-                prediction_mask = prediction_mask.numpy()
-
-        return self._plot_sample(
-            image,
-            label_mask,
-            prediction=prediction_mask if showing_predictions else None,
-            suptitle=suptitle,
-            show_axes=show_axes,
-        )
 
     @staticmethod
-    def _plot_sample(image, label, prediction=None, suptitle=None, show_axes=False):
+    def _plot_sample(image, label, prediction=None, suptitle=None, show_axes=False, embedding_input=False, **kwargs):
         num_images = 4 if prediction is not None else 3
         fig, ax = plt.subplots(1, num_images, figsize=(12, 10), layout="compressed")
         axes_visibility = "on" if show_axes else "off"
 
         norm = mpl.colors.Normalize(vmin=label.min(), vmax=label.max())
         ax[0].axis(axes_visibility)
-        ax[0].title.set_text("Image")
+        ax[0].title.set_text("Embedding PCA" if embedding_input else "RGB Image")
         ax[0].imshow(image)
 
         ax[1].axis(axes_visibility)

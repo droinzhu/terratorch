@@ -49,9 +49,9 @@ class MEuroSATNonGeoDataModule(GeobenchDataModule):
         num_workers: int = 0,
         data_root: str = "./",
         bands: Sequence[str] | None = None,
-        train_transform: A.Compose | None | list[A.BasicTransform] = None,
-        val_transform: A.Compose | None | list[A.BasicTransform] = None,
-        test_transform: A.Compose | None | list[A.BasicTransform] = None,
+        train_transform: A.Compose | None | list = None,
+        val_transform: A.Compose | None | list = None,
+        test_transform: A.Compose | None | list = None,
         aug: AugmentationSequential = None,
         partition: str = "default",
         **kwargs: Any,
@@ -64,9 +64,9 @@ class MEuroSATNonGeoDataModule(GeobenchDataModule):
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             data_root (str, optional): Root directory of the dataset. Defaults to "./".
             bands (Sequence[str] | None, optional): List of bands to use. Defaults to None.
-            train_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for training.
-            val_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for validation.
-            test_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for testing.
+            train_transform (A.Compose | None | list, optional): Transformations for training.
+            val_transform (A.Compose | None | list, optional): Transformations for validation.
+            test_transform (A.Compose | None | list, optional): Transformations for testing.
             aug (AugmentationSequential, optional): Augmentation/normalization pipeline. Defaults to None.
             partition (str, optional): Partition size. Defaults to "default".
             **kwargs (Any): Additional keyword arguments.

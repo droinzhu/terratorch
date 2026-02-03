@@ -37,6 +37,7 @@ def test_forestnet_datamodule(dummy_forestnet_data):
     datamodule = MForestNetNonGeoDataModule(
         data_root=dummy_forestnet_data,
         bands=bands,
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

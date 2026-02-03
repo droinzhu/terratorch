@@ -199,51 +199,21 @@ def get_input_chips(
 
     return coordinates_and_inputs
 
-
-def tiled_inference(
-    model_forward: Callable,
+def prepare_tiled_inference_input(
     input_batch: torch.Tensor,
     out_channels: int | None = None,
-    inference_parameters: TiledInferenceParameters = None,
+    inference_parameters: TiledInferenceParameters | None = None,
     crop: int = 224,
     stride: int = 192,
     delta: int = 8,
+    blend_overlaps: bool = True,
     h_crop: int | None = None,
     w_crop: int | None = None,
     h_stride: int | None = None,
     w_stride: int | None = None,
-    average_patches: bool = True,
-    blend_overlaps: bool = True,
-    batch_size: int = 16,
-    verbose: bool = False,
     padding: str | bool = "reflect",
-    **kwargs,
-) -> torch.Tensor:
-    """
-    Divide an image into (potentially) overlapping chips and perform inference on them.
-    Additionally, re-batch for varibale GPU utilization defined by crop size and batch_size.
-    The overlap between chips is defined with: crop - stride - 2 * delta.
-
-    Args:
-        model_forward (Callable): Callable that return the output of the model.
-        input_batch (torch.Tensor): Input batch to be processed
-        out_channels (int): Number of output channels
-        inference_parameters (TiledInferenceParameters): Parameters to be used for inference.
-            Deprecated, please us directly pass the parameters to tiled_inference.
-        crop (int): height and width of the smaller chips. Ignored if h_crop or w_crop is provided. Defaults to 224.
-        stride (int): size of the stride. Ignored if h_stride or w_stride is provided. Defaults to 192.
-        delta (int): size of the border cropped from each chip. Defaults to 8.
-        h_crop (int, optional): height of the smaller chips.
-        w_crop (int, optional): width of the smaller chips.
-        h_stride (int, optional): size of the stride on the y-axis.
-        w_stride (int, optional): size of the stride on the x-axis.
-        average_patches (bool): Whether to average the overlapping regions. Defaults to True.
-        batch_size (int): Number of chips per forward pass. Defaults to 16.
-        padding (str | bool): Padding mode for input image to reduce artefacts on edges. Deactivate padding with False.
-            Defaults to reflect.
-    Returns:
-        torch.Tensor: The result of the inference
-    """
+    device: str | None = None
+) -> tuple[list[InferenceInput], Callable[[torch.Tensor], dict | torch.Tensor], int, int, int, str | torch.device]:
 
     if inference_parameters is not None:
         # TODO: Remove inference_parameters in later version 1.3.
@@ -258,9 +228,7 @@ def tiled_inference(
         w_crop = inference_parameters.w_crop
         w_stride = inference_parameters.w_stride
         delta = inference_parameters.delta
-        average_patches = inference_parameters.average_patches
         blend_overlaps = inference_parameters.blend_overlaps
-        verbose = inference_parameters.verbose
 
     if isinstance(input_batch, dict):
         # Handle dict inputs for tiled inference
@@ -311,13 +279,12 @@ def tiled_inference(
     else:
         raise ValueError("input for tiled inference must be either a torch.Tensor or a dict of torch.Tensors")
 
-    device = input_batch.device
+    input_batch_size = input_batch.shape[0]
+    h_img, w_img = input_batch.shape[-2:]
+    ret_device = device or input_batch.device
 
     # Move inputs to CPU to avoid out-of-memory errors
     input_batch = input_batch.cpu()
-
-    input_batch_size = input_batch.shape[0]
-    h_img, w_img = input_batch.shape[-2:]
 
     h_crop = h_crop or crop
     w_crop = w_crop or crop
@@ -333,13 +300,139 @@ def tiled_inference(
         warnings.warn(
             "out_channels is deprecated and automatically selected after first forward pass.", DeprecationWarning
         )
-    preds = None  # Preds is initialized after the first forward pass
 
     # Get smaller inputs
     coordinates_and_inputs = get_input_chips(
         input_batch, h_crop, h_stride, w_crop, w_stride, delta, blend_overlaps, padding
     )
 
+    return coordinates_and_inputs, tensor_reshape, input_batch_size, h_img, w_img, ret_device, delta
+
+def generate_tiled_inference_output(outputs,
+                                    input_batch_size: int,
+                                    h_img: int,
+                                    w_img: int,
+                                    delta: int,
+                                    padding: str | bool = "reflect",
+                                    average_patches: bool = True,
+    ) -> torch.Tensor:
+    preds: torch.Tensor | None = None
+    preds_count: torch.Tensor | None = None
+
+    for batch_input, predicted in outputs:
+        if preds is None:
+            # Initialize preds based on first output
+            out_channels = 1 if len(predicted.shape) == 2 else predicted.shape[0]
+            if padding:
+                # Add padding areas to align with input indexes
+                preds = torch.zeros(
+                    (input_batch_size, out_channels, h_img + (2 * delta), w_img + (2 * delta))
+                )
+                preds_count = torch.zeros(input_batch_size, h_img + (2 * delta), w_img + (2 * delta))
+            else:
+                preds = torch.zeros((input_batch_size, out_channels, h_img, w_img))
+                preds_count = torch.zeros(input_batch_size, h_img, w_img)
+        if batch_input.output_crop is not None:
+            predicted = predicted[..., batch_input.output_crop[0], batch_input.output_crop[1]]
+        if average_patches:
+            preds[
+                batch_input.batch,
+                :,
+                batch_input.input_coords[0],
+                batch_input.input_coords[1],
+            ] += predicted * batch_input.blend_mask
+        else:
+            preds[
+                batch_input.batch,
+                :,
+                batch_input.input_coords[0],
+                batch_input.input_coords[1],
+            ] = predicted
+
+        preds_count[
+            batch_input.batch,
+            batch_input.input_coords[0],
+            batch_input.input_coords[1],
+        ] += batch_input.blend_mask
+
+    if padding:
+        # Remove padded areas
+        preds = preds[..., delta:-delta, delta:-delta]
+        preds_count = preds_count[..., delta:-delta, delta:-delta]
+    if (preds_count == 0).sum() != 0:
+        msg = "Some pixels did not receive a classification!"
+        raise RuntimeError(msg)
+
+    output = preds
+
+    if average_patches:
+        output = output / preds_count.unsqueeze(1)
+
+    return output
+
+def tiled_inference(
+    model_forward: Callable,
+    input_batch: torch.Tensor,
+    out_channels: int | None = None,
+    inference_parameters: TiledInferenceParameters | None = None,
+    crop: int = 224,
+    stride: int = 192,
+    delta: int = 8,
+    h_crop: int | None = None,
+    w_crop: int | None = None,
+    h_stride: int | None = None,
+    w_stride: int | None = None,
+    average_patches: bool = True,
+    blend_overlaps: bool = True,
+    batch_size: int = 16,
+    verbose: bool = False,
+    padding: str | bool = "reflect",
+    device: str | None = None,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    Divide an image into (potentially) overlapping chips and perform inference on them.
+    Additionally, re-batch for varibale GPU utilization defined by crop size and batch_size.
+    The overlap between chips is defined with: crop - stride - 2 * delta.
+
+    Args:
+        model_forward (Callable): Callable that return the output of the model.
+        input_batch (torch.Tensor): Input batch to be processed
+        out_channels (int): Number of output channels
+        inference_parameters (TiledInferenceParameters): Parameters to be used for inference.
+            Deprecated, please us directly pass the parameters to tiled_inference.
+        crop (int): height and width of the smaller chips. Ignored if h_crop or w_crop is provided. Defaults to 224.
+        stride (int): size of the stride. Ignored if h_stride or w_stride is provided. Defaults to 192.
+        delta (int): size of the border cropped from each chip. Defaults to 8.
+        h_crop (int, optional): height of the smaller chips.
+        w_crop (int, optional): width of the smaller chips.
+        h_stride (int, optional): size of the stride on the y-axis.
+        w_stride (int, optional): size of the stride on the x-axis.
+        average_patches (bool): Whether to average the overlapping regions. Defaults to True.
+        batch_size (int): Number of chips per forward pass. Defaults to 16.
+        padding (str | bool): Padding mode for input image to reduce artefacts on edges. Deactivate padding with False.
+            Defaults to reflect.
+    Returns:
+        torch.Tensor: The result of the inference
+    """
+
+    coordinates_and_inputs, tensor_reshape, input_batch_size, h_img, w_img, device, delta = prepare_tiled_inference_input(
+        input_batch=input_batch,
+        out_channels=out_channels,
+        inference_parameters=inference_parameters,
+        crop=crop,
+        stride=stride,
+        delta=delta,
+        h_crop=h_crop,
+        w_crop=w_crop,
+        h_stride=h_stride,
+        w_stride=w_stride,
+        blend_overlaps=blend_overlaps,
+        padding=padding,
+        device=device,
+    )
+
+    outputs: list[tuple[InferenceInput, torch.Tensor]] = []
     # NOTE: the output may be SLIGHTLY different using batched inputs because of layers such as nn.LayerNorm
     # During inference, these layers compute batch statistics that affect the output.
     # However, this should still be correct.
@@ -354,52 +447,17 @@ def tiled_inference(
             tensor_input = tensor_reshape(tensor_input)  # Optional reshaping for inputs other than plain tensors
             output = model_forward(tensor_input, **kwargs).cpu()
             output = [output[i] for i in range(len(batch))]
-            for batch_input, predicted in zip(batch, output, strict=True):
-                if preds is None:
-                    # Initialize preds based on first output
-                    out_channels = 1 if len(predicted.shape) == 2 else predicted.shape[0]
-                    if padding:
-                        # Add padding areas to align with input indexes
-                        preds = input_batch.new_zeros(
-                            (input_batch_size, out_channels, h_img + (2 * delta), w_img + (2 * delta))
-                        )
-                        preds_count = input_batch.new_zeros(input_batch_size, h_img + (2 * delta), w_img + (2 * delta))
-                    else:
-                        preds = input_batch.new_zeros((input_batch_size, out_channels, h_img, w_img))
-                        preds_count = input_batch.new_zeros(input_batch_size, h_img, w_img)
-                if batch_input.output_crop is not None:
-                    predicted = predicted[..., batch_input.output_crop[0], batch_input.output_crop[1]]
-                if average_patches:
-                    preds[
-                        batch_input.batch,
-                        :,
-                        batch_input.input_coords[0],
-                        batch_input.input_coords[1],
-                    ] += predicted * batch_input.blend_mask
-                else:
-                    preds[
-                        batch_input.batch,
-                        :,
-                        batch_input.input_coords[0],
-                        batch_input.input_coords[1],
-                    ] = predicted
 
-                preds_count[
-                    batch_input.batch,
-                    batch_input.input_coords[0],
-                    batch_input.input_coords[1],
-                ] += batch_input.blend_mask
+            outputs.extend(list(zip(batch, output, strict=True)))
 
-    if padding:
-        # Remove padded areas
-        preds = preds[..., delta:-delta, delta:-delta]
-        preds_count = preds_count[..., delta:-delta, delta:-delta]
-    if (preds_count == 0).sum() != 0:
-        msg = "Some pixels did not receive a classification!"
-        raise RuntimeError(msg)
-    if average_patches:
-        output = preds / preds_count.unsqueeze(1)
-        output = output.to(device)
-        return output
-    output = preds.to(device)
-    return output
+    output = generate_tiled_inference_output(
+        outputs=outputs,
+        input_batch_size=input_batch_size,
+        h_img=h_img,
+        w_img=w_img,
+        delta=delta,
+        padding=padding,
+        average_patches=average_patches,
+    )
+
+    return output.to(device)

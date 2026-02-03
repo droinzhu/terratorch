@@ -1,9 +1,5 @@
-################################################################
-# Licensed Materials - Property of IBM
-# "Restricted Materials of IBM"
-# Copyright IBM Corp. 2025 ALL RIGHTS RESERVED
-################################################################
-
+# Copyright contributors to the Terratorch project
+# SPDX-License-Identifier: Apache-2.0
 
 # lightning.pytorch==2.1.1
 seed_everything: 0
@@ -14,30 +10,31 @@ trainer:
   num_nodes: 1
   precision: 16-mixed
   logger: true
+
   callbacks:
-    - class_path: RichProgressBar
-    - class_path: LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: epoch
-    # ---- Early stop if ----
-    - class_path: EarlyStopping
+
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val/loss
         patience: 20
-     # ---- Early stop endif ----
-    - class_path: ModelCheckpoint
+
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: /dccstor/terratorch/tmp/timm_convnext_large/
         mode: min
         monitor: val/loss
         filename: best-state_dict-{epoch:02d}
-        save_weights_only: True
-      
+        save_weights_only: true
+
   max_epochs: 2
   check_val_every_n_epoch: 1
   log_every_n_steps: 50
   enable_checkpointing: true
-  default_root_dir:  /dccstor/terratorch/tmp/timm_convnext_large/
+  default_root_dir: /dccstor/terratorch/tmp/timm_convnext_large/
+
 
 
 data:
@@ -105,13 +102,13 @@ data:
 
     # if backbone is prithvi-EO-v2
     test_transform:
-      - class_path: ToTensorV2
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
 model:
   class_path: terratorch.tasks.SemanticSegmentationTask
   init_args:
     model_args: 
       backbone: timm_convnext_large.fb_in22k # timm_convnext_large.fb_in22k , timm_convnext_xlarge.fb_in22k
-      backbone_pretrained: true 
+      backbone_pretrained: false 
       num_classes: 3
       backbone_in_chans: 6 # To be used with RGB when pretrained, can be more if not retrained
       necks: 
@@ -151,6 +148,6 @@ optimizer:
     weight_decay: 0.05
     # ---- Optimizer stop if ----
 lr_scheduler:
-  class_path: ReduceLROnPlateau
+  class_path: lightning.pytorch.cli.ReduceLROnPlateau
   init_args:
     monitor: val/loss

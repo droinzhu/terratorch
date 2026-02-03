@@ -37,6 +37,7 @@ def test_msacrop_datamodule(dummy_msacrop_data):
     datamodule = MSACropTypeNonGeoDataModule(
         data_root=dummy_msacrop_data,
         bands=bands,
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

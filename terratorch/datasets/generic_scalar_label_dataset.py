@@ -7,6 +7,7 @@ import os
 from abc import ABC
 from pathlib import Path
 from typing import Any, Tuple
+import warnings
 
 import albumentations as A  # noqa: N812
 import numpy as np
@@ -46,6 +47,7 @@ class GenericScalarLabelDataset(NonGeoDataset, ImageFolder, ABC):
         transform: A.Compose | None = None,
         no_data_replace: float = 0,
         expand_temporal_dimension: bool = False,  # noqa: FBT001, FBT002
+        temporal_channel_major: bool = False,
     ) -> None:
         """Constructor
 
@@ -74,7 +76,8 @@ class GenericScalarLabelDataset(NonGeoDataset, ImageFolder, ABC):
                 Defaults to None, which simply applies ToTensorV2().
             no_data_replace (float): Replace nan values in input images with this value. Defaults to 0.
             expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
-                Defaults to False.
+                Defaults to False. Assumes bands are grouped by time (all bands of one timestep are stacked together), otherwise set temporal_channel_major=True.
+            temporal_channel_major: Used for expand_temporal_dimension, set True if bands are grouped by channel (all timesteps of one band are stacked together).
         """
         self.split_file = split
         self.split = split
@@ -84,9 +87,19 @@ class GenericScalarLabelDataset(NonGeoDataset, ImageFolder, ABC):
         self.constant_scale = constant_scale
         self.no_data_replace = no_data_replace
         self.expand_temporal_dimension = expand_temporal_dimension
-        if self.expand_temporal_dimension and output_bands is None:
-            msg = "Please provide output_bands when expand_temporal_dimension is True"
-            raise Exception(msg)
+        if self.expand_temporal_dimension:
+            if not self.temporal_channel_major:
+                warnings.warn(
+                    "expand_temporal_dimension=True assumes bands are grouped by time "
+                    "(all bands of one timestep are stacked together). "
+                    "If instead bands are grouped by channel "
+                    "(all timesteps of one band are stacked together), "
+                    "set temporal_channel_major=True.")
+
+            if dataset_bands is None:
+                raise ValueError(
+                    "Please provide dataset_bands when expand_temporal_dimension=True."
+                )
         if self.split_file is not None:
             with open(self.split_file) as f:
                 split = f.readlines()
@@ -178,7 +191,10 @@ class GenericScalarLabelDataset(NonGeoDataset, ImageFolder, ABC):
         image, label = self.__base_getitem__(index)
 
         if self.expand_temporal_dimension:
-            image = rearrange(image, "h w (channels time) -> time h w channels", channels=len(self.output_bands))
+            if self.temporal_channel_major:
+                image = rearrange(image, "h w (channels time) -> time h w channels", channels=len(self.dataset_bands))
+            else:
+                image = rearrange(image, "h w (time channels) -> time h w channels", channels=len(self.dataset_bands))
         if self.filter_indices:
             image = image[..., self.filter_indices]
 

@@ -17,14 +17,22 @@
 
 [![huggingface](https://img.shields.io/badge/Hugging_Face-join-FFD21E?logo=huggingface)](https://huggingface.co/ibm-nasa-geospatial)
 [![pypi](https://badge.fury.io/py/terratorch.svg)](https://pypi.org/project/terratorch)
-[![tests](https://github.com/IBM/terratorch/actions/workflows/test.yaml/badge.svg)](https://github.com/ibm/terratorch/actions/workflows/test.yaml)
-[![MkDocs](https://img.shields.io/badge/MkDocs-526CFE?logo=materialformkdocs&logoColor=fff)](https://ibm.github.io/terratorch/)
-![cov](https://github.com/IBM/terratorch/raw/main/assets/coverage-badge.svg)
+[![tests](https://github.com/terrastackai/terratorch/actions/workflows/test.yaml/badge.svg)](https://github.com/terrastackai/terratorch/actions/workflows/test.yaml)
+[![MkDocs](https://img.shields.io/badge/MkDocs-526CFE?logo=materialformkdocs&logoColor=fff)](https://terrastackai.github.io/terratorch/)
+<!--
+![cov](https://github.com/terrastackai/terratorch/raw/main/assets/coverage-badge.svg)
+-->
 [![PyPI Downloads](https://img.shields.io/pypi/dm/terratorch.svg?label=PyPI%20downloads)](https://pypi.org/project/terratorch/)
 [![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/terratorch.svg?label=Conda%20downloads)](https://anaconda.org/conda-forge/terratorch)
+
+Please, read the contribution guidelines (see `Contribution` below) if you want to contribute to
+TerraTorch.
+
 ## Overview
 TerraTorch is a PyTorch domain library based on [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) and the [TorchGeo](https://github.com/microsoft/torchgeo) domain library
 for geospatial data. 
+
+Please also try our HPO/NAS tool: [Iterate](https://github.com/terrastackai/iterate)
 
 ## Disclaimer
 TerraTorch provides tools for fine-tuning and using pretrained models.
@@ -34,9 +42,9 @@ User responsibility: It is the sole responsibility of the user to verify that th
 The TerraTorch maintainers do not provide legal advice and are not liable for any misuse of third-party models.
 
 <hr>
-<a href="https://www.youtube.com/watch?v=CB3FKtmuPI8">
+<a href="https://youtu.be/LNKovSef5lU">
   <img src="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png" alt="YouTube" width="20">
-  Watch the latest recording on YouTube: Earth observation foundation models with Prithvi-EO-2.0 and TerraTorch
+  Video: Introduction to TerraTorch
   <img src="https://upload.wikimedia.org/wikipedia/commons/4/42/YouTube_icon_%282013-2017%29.png" alt="YouTube" width="20">
 </a>
 <hr>
@@ -72,8 +80,8 @@ In order to use the file `pyproject.toml` it is necessary to guarantee `pip>=21.
 
 For a stable point-release, use `pip install terratorch==<version>`.
 
-[comment]: <If you prefer to get the most recent version of the main branch, install the library with `pip install git+https://github.com/IBM/terratorch.git`.>
-To get the most recent version of the branch `main`, install the library with `pip install git+https://github.com/IBM/terratorch.git`.
+[comment]: <If you prefer to get the most recent version of the main branch, install the library with `pip install git+https://github.com/terrastackai/terratorch.git`.>
+To get the most recent version of the branch `main`, install the library with `pip install git+https://github.com/terrastackai/terratorch.git`.
 
 ### Conda
 TerraTorch is also available on `conda-forge`, to install from there do `conda install -c conda-forge terratorch`. 
@@ -90,34 +98,31 @@ are installing from `conda-forge` it probably won't be a problem.
 ### Install as a developer
 To install as a developer (e.g. to extend the library):
 ```
-git clone https://github.com/IBM/terratorch.git
+git clone https://github.com/terrastackai/terratorch.git
 cd terratorch
-pip install -r requirements_test.txt
-conda install -c conda-forge gdal
-pip install -e .
+pip install -e .[test]
 ```
-
 To install terratorch with partial (work in development) support for Weather Foundation Models, `pip install -e .[wxc]`, which currently works just for `Python >= 3.11`. 
 
 ## Documentation
 
-To get started, check out the [quick start guide](https://ibm.github.io/terratorch/quick_start).
+To get started, check out the [quick start guide](https://terrastackai.github.io/terratorch/quick_start).
 
-Developers, check out the [architecture overview](https://ibm.github.io/terratorch/architecture).
+Developers, check out the [architecture overview](https://terrastackai.github.io/terratorch/architecture).
 
 [TerraTorch: The Geospatial Foundation Models Toolkit on arXiv](https://arxiv.org/abs/2503.20563)
 ## Contributing
 
 This project welcomes contributions and suggestions. Ways to contribute or get involved:
 
-- Join our [Slack](https://join.slack.com/t/terratorch/shared_invite/zt-3e84x0aw2-cMojjUP~2WBXbao9pipWfg)
-- Create an [Issue](https://github.com/IBM/terratorch/issues) (for bugs or feature requests)
-- Contribute via [PR](https://github.com/IBM/terratorch/pulls)
+- Join our [Discord](https://discord.gg/vQXTNmrkTM)
+- Create an [Issue](https://github.com/terrastackai/terratorch/issues) (for bugs or feature requests)
+- Contribute via [PR](https://github.com/terrastackai/terratorch/pulls)
 - Join our [duoweekly](https://romeokienzler.medium.com/the-duoweekly-manifesto-eaa6c1f542c8) community calls taking place [Tuesdays 4:30 PM - 5 PM CEST](https://teams.microsoft.com/l/meetup-join/19%3ameeting_MWJhMThhMTMtMjc3MS00YjAyLWI3NTMtYTI0NDQ3NWY3ZGU2%40thread.v2/0?context=%7b%22Tid%22%3a%22fcf67057-50c9-4ad4-98f3-ffca64add9e9%22%2c%22Oid%22%3a%227f7ab87a-680c-4c93-acc5-fbd7ec80823a%22%7d) and [Thursdays 2:30 PM - 3 PM CEST](https://teams.microsoft.com/l/meetup-join/19%3ameeting_MWJhMThhMTMtMjc3MS00YjAyLWI3NTMtYTI0NDQ3NWY3ZGU2%40thread.v2/0?context=%7b%22Tid%22%3a%22fcf67057-50c9-4ad4-98f3-ffca64add9e9%22%2c%22Oid%22%3a%227f7ab87a-680c-4c93-acc5-fbd7ec80823a%22%7d).
 
-You can find more detailed contribution guidelines [here](https://ibm.github.io/terratorch/stable/contributing/). 
+You can find more detailed contribution guidelines [here](https://terrastackai.github.io/terratorch/stable/contributing/). 
 
-A simple hint for any contributor. If you want to meet the GitHub DCO checks, just do your commits as below:
+If you want to meet the GitHub DCO checks, you **need** to do your commits as below:
 ```
 git commit -s -m <message>
 ```
@@ -125,7 +130,14 @@ It will sign the commit with your ID and the check will be met.
 
 ## Credits
 
-TerraTorch is supported by the EU’s Horizon Europe program under Grant Agreement number 101131841 and also received funding from the Swiss State Secretariat for Education, Research and Innovation (SERI) and the UK Research and Innovation (UKRI).
+<img src="assets/embed2scale_logo.svg"
+   alt="Embed2Scale"
+   height="62"
+   style="vertical-align: middle; margin-right: 6px;" />
+<strong>Embed2Scale.</strong>
+The embedding workflow integration and maintenance in TerraTorch are carried out as part of the Embed2Scale project
+(Earth Observation & Weather Data Federation with AI Embeddings), funded by the EU’s Horizon Europe programme
+(Grant Agreement No. 101131841), with additional support from SERI and UKRI.
 
 
 ## License

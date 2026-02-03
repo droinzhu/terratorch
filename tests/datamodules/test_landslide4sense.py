@@ -30,6 +30,7 @@ def test_landslide4sense_datamodule(dummy_landslide_data):
     datamodule = Landslide4SenseNonGeoDataModule(
         data_root=dummy_landslide_data,
         bands=Landslide4SenseNonGeo.all_band_names,
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

@@ -45,6 +45,7 @@ def test_mbrickkiln_datamodule(dummy_mbrickkiln_data):
         data_root=dummy_mbrickkiln_data,
         bands=bands,
         partition="default",
+        batch_size=1,
     )
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

@@ -5,8 +5,10 @@ import numpy as np
 import torch 
 import pandas as pd
 import lightning
+import matplotlib.pyplot as plt
 from lightning.pytorch.callbacks import Callback
 from torchgeo.trainers import BaseTask
+from torchgeo.datasets.utils import unbind_samples
 
 from terratorch.models.model import Model
 from terratorch.tasks.optimizer_factory import optimizer_factory
@@ -27,13 +29,15 @@ class TerraTorchTask(BaseTask):
         self, 
         task: str | None = None, 
         tiled_inference_on_testing: bool = False, 
-        tiled_inference_on_validation: bool = False, 
+        tiled_inference_on_validation: bool = False,
+        plot_on_val: bool | int = False,
         path_to_record_metrics: str = False):
 
         self.task = task
         self.tiled_inference_on_testing = tiled_inference_on_testing
         self.tiled_inference_on_validation = tiled_inference_on_validation
         self.path_to_record_metrics = path_to_record_metrics
+        self.plot_on_val = int(plot_on_val)
 
         super().__init__()
 
@@ -49,7 +53,7 @@ class TerraTorchTask(BaseTask):
             return
 
         self.model: Model = self.model_factory.build_model(
-            self.task, aux_decoders=self.aux_heads, **self.hparams["model_args"]
+            self.task, aux_decoders=self.aux_heads, **self.model_args
         )
 
         if self.hparams["freeze_backbone"]:
@@ -58,10 +62,10 @@ class TerraTorchTask(BaseTask):
                 raise ValueError(msg)
             self.model.freeze_encoder()
 
-        if self.hparams["freeze_decoder"]:
+        if self.hparams.get("freeze_decoder", None):
             self.model.freeze_decoder()
 
-        if self.hparams["freeze_head"]:
+        if self.hparams.get("freeze_head", None):
             self.model.freeze_head()
 
     def handle_full_or_tiled_inference(
@@ -167,8 +171,52 @@ class TerraTorchTask(BaseTask):
             and self.logger
             and not self.current_epoch % self.plot_on_val  # will be True every self.plot_on_val epochs
             and hasattr(self.logger, "experiment")
-            and (hasattr(self.logger.experiment, "add_figure") or hasattr(self.logger.experiment, "log_figure"))
+            and (hasattr(self.logger.experiment, "add_figure") or
+                 hasattr(self.logger.experiment, "log_figure") or
+                 hasattr(self.logger.experiment, "log"))
         )
+
+    def plot_sample(self, batch, batch_idx):
+        try:
+            if isinstance(batch["image"], dict):
+                # Move modalities to main dict for unbind
+                for k, v in batch.pop("image").items():
+                    batch[k] = v
+            if batch.get("filename", None):
+                if isinstance(batch["filename"], dict) and len(batch["filename"]):
+                    # Get filename from first modality
+                    batch["filename"] = list(batch["filename"].values())[0]
+
+            for key, value in batch.items():
+                if isinstance(value, torch.Tensor):
+                    batch[key] = value.cpu()
+
+            sample = unbind_samples(batch)[0]
+            datamodule = self.trainer.datamodule
+            fig = datamodule.val_dataset.plot(sample) if hasattr(datamodule.val_dataset, "plot") else datamodule.plot(
+                sample, "val")
+            if fig:
+                summary_writer = self.logger.experiment
+                caption = batch.get("filename", batch_idx)
+                if isinstance(caption, dict):
+                    caption = list(caption.values())[0]
+                if isinstance(caption, list):
+                    caption = caption[0]
+                caption = str(caption).rsplit('.')[0]
+                if hasattr(summary_writer, "add_figure"):
+                    summary_writer.add_figure(f"image/{caption}", fig, global_step=self.global_step)
+                elif hasattr(summary_writer, "log_figure"):
+                    summary_writer.log_figure(
+                        self.logger.run_id, fig, f"epoch_{self.current_epoch}_{batch_idx}.png"
+                    )
+                elif hasattr(self.logger, "log_image"):
+                    # Log image to WandB
+                    self.logger.log_image(key="samples", images=[fig],
+                                          caption=[f"step{self.global_step}_{caption}"])
+        except ValueError:
+            pass
+        finally:
+            plt.close()
 
     def record_metrics(self, dataloader_idx, y_hat_hard, y):
 

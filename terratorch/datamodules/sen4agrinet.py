@@ -16,10 +16,10 @@ class Sen4AgriNetDataModule(NonGeoDataModule):
         batch_size: int = 8,
         num_workers: int = 0,
         data_root: str = "./",
-        train_transform: A.Compose | None | list[A.BasicTransform] = None,
-        val_transform: A.Compose | None | list[A.BasicTransform] = None,
-        test_transform: A.Compose | None | list[A.BasicTransform] = None,
-        predict_transform: A.Compose | None | list[A.BasicTransform] = None,
+        train_transform: A.Compose | None | list = None,
+        val_transform: A.Compose | None | list = None,
+        test_transform: A.Compose | None | list = None,
+        predict_transform: A.Compose | None | list = None,
         seed: int = 42,
         scenario: str = "random",
         requires_norm: bool = True,
@@ -35,10 +35,10 @@ class Sen4AgriNetDataModule(NonGeoDataModule):
             batch_size (int, optional): Batch size for DataLoaders. Defaults to 8.
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             data_root (str, optional): Root directory of the dataset. Defaults to "./".
-            train_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for training data.
-            val_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for validation data.
-            test_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for test data.
-            predict_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for prediction data.
+            train_transform (A.Compose | None | list, optional): Transformations for training data.
+            val_transform (A.Compose | None | list, optional): Transformations for validation data.
+            test_transform (A.Compose | None | list, optional): Transformations for test data.
+            predict_transform (A.Compose | None | list, optional): Transformations for prediction data.
             seed (int, optional): Random seed for reproducibility. Defaults to 42.
             scenario (str): Defines the splitting scenario to use. Options are:
                 - 'random': Random split of the data.

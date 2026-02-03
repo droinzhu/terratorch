@@ -71,10 +71,10 @@ class BioMasstersNonGeoDataModule(NonGeoDataModule):
         batch_size: int = 4,
         num_workers: int = 0,
         bands: dict[str, Sequence[str]] | Sequence[str] = BioMasstersNonGeo.all_band_names,
-        train_transform: A.Compose | None | list[A.BasicTransform] = None,
-        val_transform: A.Compose | None | list[A.BasicTransform] = None,
-        test_transform: A.Compose | None | list[A.BasicTransform] = None,
-        predict_transform: A.Compose | None | list[A.BasicTransform] = None,
+        train_transform: A.Compose | None | list = None,
+        val_transform: A.Compose | None | list = None,
+        test_transform: A.Compose | None | list = None,
+        predict_transform: A.Compose | None | list = None,
         aug: AugmentationSequential = None,
         drop_last: bool = True,
         sensors: Sequence[str] = ["S1", "S2"],
@@ -97,10 +97,10 @@ class BioMasstersNonGeoDataModule(NonGeoDataModule):
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             bands (dict[str, Sequence[str]] | Sequence[str], optional): Band configuration; either a dict mapping sensors to bands or a list for the first sensor.
                 Defaults to BioMasstersNonGeo.all_band_names
-            train_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for training data.
-            val_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for validation data.
-            test_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for testing data.
-            predict_transform (A.Compose | None | list[A.BasicTransform], optional): Transformations for prediction data.
+            train_transform (A.Compose | None | list, optional): Transformations for training data.
+            val_transform (A.Compose | None | list, optional): Transformations for validation data.
+            test_transform (A.Compose | None | list, optional): Transformations for testing data.
+            predict_transform (A.Compose | None | list, optional): Transformations for prediction data.
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
             drop_last (bool, optional): Whether to drop the last incomplete batch. Defaults to True.
             sensors (Sequence[str], optional): List of sensors to use (e.g., ["S1", "S2"]). Defaults to ["S1", "S2"].

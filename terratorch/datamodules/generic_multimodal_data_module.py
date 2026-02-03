@@ -5,6 +5,7 @@ This module contains generic data modules for instantiation at runtime.
 """
 
 import logging
+from typing import Any
 import warnings
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -14,7 +15,6 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader, RandomSampler, BatchSampler, SequentialSampler, default_collate
 from torchgeo.datamodules import NonGeoDataModule
-
 from terratorch.datasets import (GenericMultimodalDataset, GenericMultimodalSegmentationDataset,
                                  GenericMultimodalPixelwiseRegressionDataset, GenericMultimodalScalarDataset, HLSBands)
 from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
@@ -63,6 +63,9 @@ def collate_samples(batch_list):
 
 
 def wrap_in_compose_is_list(transform_list, image_modalities=None, non_image_modalities=None):
+    if not isinstance(transform_list, Iterable):
+        return transform_list
+
     additional_targets = {}
     if image_modalities:
         for modality in image_modalities:
@@ -72,8 +75,13 @@ def wrap_in_compose_is_list(transform_list, image_modalities=None, non_image_mod
         for modality in non_image_modalities:
             additional_targets[modality] = "global_label"
     # set check shapes to false because of the multitemporal case
-    return A.Compose(transform_list, is_check_shapes=False, additional_targets=additional_targets) \
-        if isinstance(transform_list, Iterable) else transform_list
+    try:
+        transform = A.Compose(transform_list, is_check_shapes=False, additional_targets=additional_targets)
+    except Exception as e:
+        raise ValueError(f"Failed to compose transform {transform_list} with error {e.__class__.__name__}: {e}."
+                         f"Expects list of albumentations.BasicTransform.")
+    return transform
+
 
 class MultimodalNormalize(Callable):
     def __init__(self, means, stds):
@@ -81,11 +89,15 @@ class MultimodalNormalize(Callable):
         self.means = means
         self.stds = stds
 
-    def __call__(self, batch):
+    def __call__(self, batch, denormalize=False):
         for m in self.means.keys():
-            if m not in batch["image"]:
+            if m in batch:
+                image = batch[m]
+            elif "image" in batch and m in batch["image"]:
+                image = batch["image"][m]
+            else:
                 continue
-            image = batch["image"][m]
+
             if len(image.shape) == 5:
                 # B, C, T, H, W
                 means = torch.tensor(self.means[m], device=image.device).view(1, -1, 1, 1, 1)
@@ -116,7 +128,15 @@ class MultimodalNormalize(Callable):
                        f"or a single channel, but got {len(image.shape)}")
                 raise Exception(msg)
 
-            batch["image"][m] = (image - means) / stds
+            if denormalize:
+                image = image * stds + means
+            else:
+                image = (image - means) / stds
+
+            if m in batch:
+                batch[m] = image
+            else:
+                batch["image"][m] = image
         return batch
 
 
@@ -161,8 +181,14 @@ class MultiModalBatchSampler(BatchSampler):
 
 class GenericMultiModalDataModule(NonGeoDataModule):
     """
-    This is a generic datamodule class for instantiating data modules at runtime.
-    Composes several [GenericNonGeoSegmentationDatasets][terratorch.datasets.GenericNonGeoSegmentationDataset]
+    This is a generic datamodule class for instantiating multimodal data modules at runtime.
+    Composes several [GenericMultimodalDataset][terratorch.datasets.GenericMultimodalDataset].
+
+    The dataset builds can take quite long do to multiple glob calls.
+    For large datasets (100k+ samples), it is recommended to provide split files with sample prefixes,
+    exact image_grep/label_grep, allow_substring_file_names=False, and optinally skip_file_checks=True,
+    e.g., with files "sample1_s2l2a.tif", use sample prefix "sample1" and image_grep={"S2": "_s2l2a.tif"}.
+    This speeds up the build. However, it does not work with allow_missing_modalities=True.
     """
 
     def __init__(
@@ -193,13 +219,14 @@ class GenericMultiModalDataModule(NonGeoDataModule):
         predict_output_bands: dict[str, list] | None = None,
         image_modalities: list[str] | None = None,
         rgb_modality: str | None = None,
-        rgb_indices: list[int] | None = None,
+        rgb_indices: list[int] | dict[str, list[int]] | None = None,
         allow_substring_file_names: bool = True,
+        skip_file_checks: bool = False,
         class_names: list[str] | None = None,
-        constant_scale: dict[float] = None,
-        train_transform: dict | A.Compose | None | list[A.BasicTransform] = None,
-        val_transform: dict | A.Compose | None | list[A.BasicTransform] = None,
-        test_transform: dict | A.Compose | None | list[A.BasicTransform] = None,
+        constant_scale: dict[str, float] | None = None,
+        train_transform: list[Any] | dict[str, list[Any]] | None = None,
+        val_transform: list[Any] | dict[str, list[Any]] | None = None,
+        test_transform: list[Any] | dict[str, list[Any]] | None = None,
         shared_transforms: list | bool = True,
         expand_temporal_dimension: bool = False,
         no_data_replace: float | None = None,
@@ -215,7 +242,6 @@ class GenericMultiModalDataModule(NonGeoDataModule):
         channel_position: int = -3,
         concat_bands: bool = False,
         check_stackability: bool = True,
-        img_grep: str | dict[str, str] | None = None,
     ) -> None:
         """Constructor
 
@@ -245,7 +271,7 @@ class GenericMultiModalDataModule(NonGeoDataModule):
                 csv/parquet files with labels. Required for supervised tasks.
             label_data_root (Path | None, optional): Fallback if label data root is shared for splits and not specified.
             image_grep (dict[str], optional): Dictionary with regular expression appended to data_root to find input
-                images, with modalities as keys. Defaults to "*". Ignored when allow_substring_file_names is False.
+                images, with modalities as keys. Only supports wildcards (*) at the beginning. Defaults to "*".
             label_grep (str, optional): Regular expression appended to label_data_root to find labels or mask files.
                 Defaults to "*". Ignored when allow_substring_file_names is False.
             train_split (Path, optional): Path to file containing training samples prefixes to be used for this split.
@@ -276,31 +302,30 @@ class GenericMultiModalDataModule(NonGeoDataModule):
             image_modalities(list[str], optional): List of pixel-level raster modalities. Defaults to data_root.keys().
                 The difference between all modalities and image_modalities are non-image modalities which are treated
                 differently during the transforms and are not modified but only converted into a tensor if possible.
-            rgb_modality (str, optional): Modality used for RGB plots. Defaults to first modality in data_root.keys().
-            rgb_indices (list[int] | None, optional): _description_. Defaults to None.
-            allow_substring_file_names (bool, optional): Allow substrings during sample identification by adding
-                image or label grep to the sample prefixes. If False, treats sample prefixes as full file names.
-                If True and no split file is provided, considers the file stem as prefix, otherwise the full file name.
-                Defaults to True.
+            rgb_modality (str, optional): rgb_modality is deprecated, provide modalities as keys in rgb_indices.
+            rgb_indices (dict[str, list[int]], optional): Indices of RGB channels for plotting with the format
+                {<modality>: [<band indices>]}. Defaults to {image_modalities[0]: [0, 1, 2]} if not provided.
+            allow_substring_file_names (bool, optional): Allow substrings during sample identification using
+                wildcards (*). If False, treats sample prefix + image_grep as full file name. Defaults to True.
+            skip_file_checks (bool, optional): Skips the check if a sample path exists. Only works
+                with allow_missing_modalities=False and allow_substring_file_names=False. Samples are expected in the
+                format <prefix><image_grep> without any wildcards (*), e.g. sample1_s2l2a.tif. Defaults to False.
             class_names (list[str], optional): Names of the classes. Defaults to None.
-            constant_scale (dict[float]): Factor to multiply data values by, provided as a dictionary with modalities as
+            constant_scale (dict[str, float]): Factor to multiply data values by, provided as a dictionary with modalities as
                 keys. Can be subset of all modalities. Defaults to None.
-            train_transform (Albumentations.Compose | dict | None): Albumentations transform to be applied to all image
-                modalities. Should end with ToTensorV2() and not include normalization. The transform is not applied to 
-                non-image data, which is only converted to tensors if possible. If dict, can include separate transforms 
-                per modality (no shared parameters between modalities). 
-                Defaults to None, which simply applies ToTensorV2().
-            val_transform (Albumentations.Compose | dict | None): Albumentations transform to be applied to all image
-                modalities. Should end with ToTensorV2() and not include normalization. The transform is not applied to 
-                non-image data, which is only converted to tensors if possible. If dict, can include separate transforms 
-                per modality (no shared parameters between modalities). 
-                Defaults to None, which simply applies ToTensorV2().
-            test_transform (Albumentations.Compose | dict | None): Albumentations transform to be applied to all image
-                modalities. Should end with ToTensorV2() and not include normalization. The transform is not applied to 
-                non-image data, which is only converted to tensors if possible. If dict, can include separate transforms 
-                per modality (no shared parameters between modalities). 
-                Defaults to None, which simply applies ToTensorV2().
-            shared_transforms (bool): transforms are shared between all image modalities (e.g., similar crop). 
+            train_transform (list | dict | None): List of albumentations transforms to be applied to image modalities.
+                Should end with albumentations.ToTensorV2() and not include normalization. The transform is not applied
+                to non-image data, which is only converted to tensors if possible. If provided as dict, transforms are
+                applied per modality without shared parameters. Defaults to None.
+            val_transform (list | dict | None): List of albumentations transforms to be applied to image modalities.
+                Should end with albumentations.ToTensorV2() and not include normalization. The transform is not applied
+                to non-image data, which is only converted to tensors if possible. If provided as dict, transforms are
+                applied per modality without shared parameters. Defaults to None.
+            test_transform (list | dict | None): List of albumentations transforms to be applied to image modalities.
+                Should end with albumentations.ToTensorV2() and not include normalization. The transform is not applied
+                to non-image data, which is only converted to tensors if possible. If provided as dict, transforms are
+                applied per modality without shared parameters. Defaults to None.
+            shared_transforms (bool): transforms are shared between all image modalities (e.g., similar crop).
                 This setting is ignored if transforms are defined per modality. Defaults to True.  
             expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
                 Only works with image modalities. Is only applied to modalities with defined dataset_bands.
@@ -350,16 +375,11 @@ class GenericMultiModalDataModule(NonGeoDataModule):
         if task == "scalar":
             self.non_image_modalities += ["label"]
 
-        if img_grep is not None:
-            warnings.warn(f"img_grep was renamed to image_grep and will be removed in a future version.",
-                          DeprecationWarning)
-            image_grep = img_grep
-
         if isinstance(image_grep, dict):
             # Check if image_grep is valid
             for key, grep in image_grep.items():
-                if "*" not in grep:
-                    warnings.warn(f"image_grep requires a wildcard with a suffix. "
+                if "*" not in grep and allow_substring_file_names:
+                    warnings.warn(f"image_grep requires a wildcard with a suffix if allow_substring_file_names=True. "
                                   f"Adding '*' to image_grep[{key}]={grep}.")
                     image_grep[key] = "*" + grep
                 if "*" in grep.strip("*/\\"):
@@ -368,8 +388,9 @@ class GenericMultiModalDataModule(NonGeoDataModule):
             self.image_grep = {m: image_grep[m] if m in image_grep else "*" for m in modalities}
         else:
             image_grep = image_grep or "*"  # Handle None
-            if "*" not in image_grep:
-                warnings.warn(f"image_grep requires a wildcard with a suffix. Adding '*' to image_grep={image_grep}.")
+            if "*" not in image_grep and allow_substring_file_names:
+                warnings.warn(f"image_grep requires a wildcard with a suffix if allow_substring_file_names=True. "
+                              f"Adding '*' to image_grep={image_grep}.")
                 image_grep = "*" + image_grep
             if "*" in image_grep.strip("*/\\"):
                 raise ValueError(f"GenericMultiModalDataModule can only handle image_grep with suffixes "
@@ -436,6 +457,11 @@ class GenericMultiModalDataModule(NonGeoDataModule):
         self.drop_last = drop_last
         self.pin_memory = pin_memory
         self.allow_missing_modalities = allow_missing_modalities
+        if skip_file_checks and (allow_missing_modalities or allow_substring_file_names):
+            raise ValueError("skip_file_checks cannot be used with allow_missing_modalities or "
+                             "allow_substring_file_names. Samples are expected in the format <prefix><image_grep> "
+                             "without any wildcards (*), e.g. sample1_s2l2a.tif with image grep={'S2': '_s2l2a.tif'}.")
+        self.skip_file_checks = skip_file_checks
         self.sample_num_modalities = sample_num_modalities
         self.sample_replace = sample_replace
         if allow_missing_modalities and batch_size > 1:
@@ -448,8 +474,26 @@ class GenericMultiModalDataModule(NonGeoDataModule):
         self.predict_dataset_bands = predict_dataset_bands or dataset_bands
         self.predict_output_bands = predict_output_bands or output_bands
 
-        self.rgb_modality = rgb_modality or modalities[0]
-        self.rgb_indices = rgb_indices
+        # TODO: Remove in future release
+        if rgb_modality is not None:
+            warnings.warn("rgb_modality is deprecated and will be removed in a future release. Provide the modalities "
+                          "for plotting as keys in `rgb_indices` with the format {'<modality>': [<band indices>]}.")
+            if isinstance(rgb_indices, list):
+                # Backwards compatibility
+                rgb_indices = {rgb_modality: rgb_indices}
+        elif isinstance(rgb_indices, list):
+            # Backwards compatibility
+            warnings.warn("`rgb_indices` was updated and expects now the format {'<modality>': [<band indices>]}. "
+                          "Assuming first modality for backwards compatibility.")
+            rgb_indices = {self.image_modalities[0]: rgb_indices}
+
+        self.rgb_indices = rgb_indices or {self.image_modalities[0]: [0, 1, 2]}
+        for mod, indices in self.rgb_indices.items():
+            # Check for RGB bands
+            if len(indices) not in [1, 3]:
+                raise ValueError(f"`rgb_indices` must have 1 or 3 elements, got {len(indices)} elements for "
+                                 f"{{'{mod}' : {indices}}}.")
+
         self.expand_temporal_dimension = expand_temporal_dimension
         self.reduce_zero_label = reduce_zero_label
         self.channel_position = channel_position
@@ -519,11 +563,11 @@ class GenericMultiModalDataModule(NonGeoDataModule):
                 split=self.train_split,
                 allow_missing_modalities=self.allow_missing_modalities,
                 allow_substring_file_names=self.allow_substring_file_names,
+                skip_file_checks=self.skip_file_checks,
                 dataset_bands=self.dataset_bands,
                 output_bands=self.output_bands,
                 constant_scale=self.constant_scale,
                 image_modalities=self.image_modalities,
-                rgb_modality=self.rgb_modality,
                 rgb_indices=self.rgb_indices,
                 transform=self.train_transform,
                 no_data_replace=self.no_data_replace,
@@ -545,11 +589,11 @@ class GenericMultiModalDataModule(NonGeoDataModule):
                 split=self.val_split,
                 allow_missing_modalities=self.allow_missing_modalities,
                 allow_substring_file_names=self.allow_substring_file_names,
+                skip_file_checks=self.skip_file_checks,
                 dataset_bands=self.dataset_bands,
                 output_bands=self.output_bands,
                 constant_scale=self.constant_scale,
                 image_modalities=self.image_modalities,
-                rgb_modality=self.rgb_modality,
                 rgb_indices=self.rgb_indices,
                 transform=self.val_transform,
                 no_data_replace=self.no_data_replace,
@@ -571,11 +615,11 @@ class GenericMultiModalDataModule(NonGeoDataModule):
                 split=self.test_split,
                 allow_missing_modalities=self.allow_missing_modalities,
                 allow_substring_file_names=self.allow_substring_file_names,
+                skip_file_checks=self.skip_file_checks,
                 dataset_bands=self.dataset_bands,
                 output_bands=self.output_bands,
                 constant_scale=self.constant_scale,
                 image_modalities=self.image_modalities,
-                rgb_modality=self.rgb_modality,
                 rgb_indices=self.rgb_indices,
                 transform=self.test_transform,
                 no_data_replace=self.no_data_replace,
@@ -596,11 +640,11 @@ class GenericMultiModalDataModule(NonGeoDataModule):
                 label_grep=self.label_grep,
                 allow_missing_modalities=self.allow_missing_modalities,
                 allow_substring_file_names=self.allow_substring_file_names,
+                skip_file_checks=self.skip_file_checks,
                 dataset_bands=self.predict_dataset_bands,
                 output_bands=self.predict_output_bands,
                 constant_scale=self.constant_scale,
                 image_modalities=self.image_modalities,
-                rgb_modality=self.rgb_modality,
                 rgb_indices=self.rgb_indices,
                 transform=self.test_transform,
                 no_data_replace=self.no_data_replace,

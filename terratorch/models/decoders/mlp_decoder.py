@@ -30,10 +30,15 @@ class MLPDecoder(nn.Module):
         self.activation = getattr(nn, activation)()
 
     def forward(self, x: list[Tensor]):
-
         data_ = torch.cat(x, axis=1)
-        data_ = data_.permute(0, 2, 3, 1)
-        data_ = self.activation(self.hidden_layer(data_))
-        data_ = data_.permute(0, 3, 1, 2)
 
-        return data_ 
+        if data_.dim() == 4:
+            data_ = data_.permute(0, 2, 3, 1)
+            data_ = self.activation(self.hidden_layer(data_))
+            data_ = data_.permute(0, 3, 1, 2)
+            return data_
+
+        if data_.dim() == 2:
+            return self.activation(self.hidden_layer(data_))
+
+        raise ValueError(f"Expected 2D or 4D, got {tuple(data_.shape)}")

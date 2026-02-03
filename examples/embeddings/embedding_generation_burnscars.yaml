@@ -1,0 +1,50 @@
+# lightning.pytorch==2.1.1
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  callbacks: []
+  max_epochs: 0
+
+data:
+  class_path: terratorch.datamodules.GenericNonGeoSegmentationDataModule
+  init_args:
+    batch_size: 8
+    check_stackability: False
+    num_workers: 8
+    no_data_replace: 0
+    num_classes: 2
+    img_grep: "*_merged.tif"
+
+    train_data_root: none
+    val_data_root: none
+    test_data_root: none
+    predict_data_root: hls_burn_scars/data
+    means: [0.1503, 0.1718, 0.1853, 0.3132,0.2424, 0.1857]
+    stds: [0.2141, 0.2038, 0.2134, 0.1753, 0.1434, 0.1334]
+
+predict_output_dir: './'
+
+model:
+  class_path: terratorch.tasks.EmbeddingGenerationTask
+  init_args:
+    model_args:
+      backbone: terramind_v1_small
+      backbone_modalities:
+        - S2L2A
+      backbone_bands:
+        S2L2A:
+          - BLUE
+          - GREEN
+          - RED
+          - NIR_NARROW
+          - SWIR_1
+          - SWIR_2
+      backbone_pretrained: True
+    output_format: tiff
+    output_dir: 'output/terramind_embeddings'
+    layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
+    embedding_pooling: null
+    has_cls: False

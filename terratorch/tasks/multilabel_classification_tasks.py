@@ -174,6 +174,10 @@ class MultiLabelClassificationTask(ClassificationTask):
         y_hat = self.to_multilabel_prediction(model_output)
         self.val_metrics.update(y_hat, y.to(torch.int32))
 
+        if self._do_plot_samples(batch_idx):
+            batch["prediction"] = y_hat
+            self.plot_sample(batch, batch_idx)
+
     def test_step(self, batch: object, batch_idx: int, dataloader_idx: int = 0) -> None:
         x = batch["image"]
         y = batch["label"].to(torch.float32)
@@ -191,6 +195,10 @@ class MultiLabelClassificationTask(ClassificationTask):
         )
         y_hat = self.to_multilabel_prediction(model_output)
         self.test_metrics[dataloader_idx].update(y_hat, y.to(torch.int32))
+
+        if self._do_plot_samples(batch_idx):
+            batch["prediction"] = y_hat
+            self.plot_sample(batch, batch_idx)
 
     def predict_step(self, batch: object, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
         """Compute the predicted class probabilities.

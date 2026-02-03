@@ -455,7 +455,7 @@ class GenerationSampler(nn.Module):
         if np.isclose(temperature, 0, atol=1e-10):
             samples = torch.argmax(logits, dim=-1)
             # Since argmax is used, all sampled_probs will be 1 as we're selecting the max probability
-            sampled_probs = torch.ones_like(samples, dtype=torch.float)
+            sampled_probs = torch.ones_like(samples, dtype=torch.get_default_dtype())
         else:
             filtered_logits = self.top_k_top_p_filtering(logits, top_k, top_p)
             probs = F.softmax(filtered_logits / temperature, dim=-1)
