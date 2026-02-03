@@ -52,6 +52,7 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         embedding_input: bool = False,
         pca_step: int = 4,
         expand_temporal_dimension: bool = False,
+        temporal_channel_major: bool = False,
         reduce_zero_label: bool = False,
     ) -> None:
         """Constructor
@@ -89,7 +90,8 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
                 PCA components are estimated using only every pca_step-th spatial embedding
                 (e.g. pca_step=4 uses 1/4 of embeddings), then applied to all embeddings. Defaults to 4.
             expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
-                Defaults to False.
+                Defaults to False. Assumes bands are grouped by time (all bands of one timestep are stacked together), otherwise set temporal_channel_major=True.
+            temporal_channel_major: Used for expand_temporal_dimension, set True if bands are grouped by channel (all timesteps of one band are stacked together).
             reduce_zero_label (bool): Subtract 1 from all labels. Useful when labels start from 1 instead of the
                 expected 0. Defaults to False.
         """
@@ -105,10 +107,21 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         self.segmentation_mask_files = sorted(glob.glob(os.path.join(label_data_root, label_grep)))
         self.reduce_zero_label = reduce_zero_label
         self.expand_temporal_dimension = expand_temporal_dimension
+        self.temporal_channel_major = temporal_channel_major
 
-        if self.expand_temporal_dimension and output_bands is None:
-            msg = "Please provide output_bands when expand_temporal_dimension is True"
-            raise Exception(msg)
+        if self.expand_temporal_dimension:
+            if not self.temporal_channel_major:
+                warnings.warn(
+                    "expand_temporal_dimension=True assumes bands are grouped by time "
+                    "(all bands of one timestep are stacked together). "
+                    "If instead bands are grouped by channel "
+                    "(all timesteps of one band are stacked together), "
+                    "set temporal_channel_major=True.")
+
+            if dataset_bands is None:
+                raise ValueError(
+                    "Please provide dataset_bands when expand_temporal_dimension=True."
+                )
         if self.split_file is not None:
             with open(self.split_file) as f:
                 split = f.readlines()
@@ -169,7 +182,10 @@ class GenericPixelWiseDataset(NonGeoDataset, ABC):
         image = self._load_file(self.image_files[index], nan_replace=self.no_data_replace).to_numpy()
         # to channels last
         if self.expand_temporal_dimension:
-            image = rearrange(image, "(channels time) h w -> channels time h w", channels=len(self.output_bands))
+            if self.temporal_channel_major:
+                image = rearrange(image, "(channels time) h w -> channels time h w", channels=len(self.dataset_bands))
+            else:
+                image = rearrange(image, "(time channels) h w -> channels time h w", channels=len(self.dataset_bands))
         image = np.moveaxis(image, 0, -1)
         if self.filter_indices:
             image = image[..., self.filter_indices]
@@ -358,7 +374,7 @@ class GenericNonGeoSegmentationDataset(GenericPixelWiseDataset):
         ax[3].axis(axes_visibility)
         ax[3].title.set_text("GT Mask on Image")
         ax[3].imshow(image)
-        ax[3].imshow(label, cmap="jet", alpha=0.5 if embedding_input else 0.3, norm=norm)
+        ax[3].imshow(label, cmap="jet", alpha=0.5 if embedding_input else 0.4, norm=norm)
 
         if prediction is not None:
             ax[4].axis(axes_visibility)

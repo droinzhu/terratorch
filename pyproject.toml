@@ -7,7 +7,7 @@ include = ["terratorch*"]
 
 [project]
 name = "terratorch"
-version = "v1.2"
+version = "v1.2.1"
 description = "TerraTorch - The geospatial foundation model fine-tuning toolkit"
 license = { "text" = "Apache License, Version 2.0" }
 readme = "README.md"
@@ -28,7 +28,8 @@ authors = [
   { name = "Þorsteinn Elí Gíslason"},
   { name = "Raunak Bhansali"},
   { name = "Takao Moriyama"},
-  { name = "Þorsteinn Elí Gíslason"}
+  { name = "Þorsteinn Elí Gíslason"},
+  { name = "Isabelle Wittmann"}
 ]
 classifiers = [
 #  "Development Status :: 2 - Pre-Alpha",
@@ -67,11 +68,15 @@ dependencies = [
   "diffusers",
   "scikit-learn>=1.3.2",
   "scikit-image",
+  "pyarrow",
+  "rich",
+  "termcolor"
 ]
 
 
 [project.entry-points."vllm.io_processor_plugins"]
 terratorch_segmentation = "terratorch.vllm.plugins.segmentation:register_segmentation_plugin"
+terratorch_tm_segmentation = "terratorch.vllm.plugins.segmentation:register_terramind_segmentation_plugin"
 
 [project.optional-dependencies]
 dev = [
@@ -91,7 +96,6 @@ test = [
   "diffusers",
   "tokenizers",
   "dask",
-  "pytest-sugar",
   "numba",
   "hdf5plugin",
   "h5netcdf",
@@ -136,7 +140,7 @@ geobenchv2 = [
 
 vllm = [
   "geobenchv2==0.9",
-  "vllm==0.11.0",
+  "vllm>=0.12,<=0.14.0",
 ]
 
 vllm_test = [
@@ -155,6 +159,9 @@ terratorch = "terratorch.__main__:main"
 [[tool.mypy.overrides]]
 module = "timm"
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+norecursedirs = [".venv", "build", "dist", "site-packages"]
 
 [tool.black]
 target-version = ["py310"]

@@ -8,7 +8,7 @@ from torch import nn
 
 from terratorch.models.heads import RegressionHead, SegmentationHead
 from terratorch.models.model import AuxiliaryHeadWithDecoderWithoutInstantiatedHead, Model, ModelOutput
-from terratorch.models.utils import pad_images, get_image_size
+from terratorch.models.utils import pad_images, get_image_size, center_crop
 
 def freeze_module(module: nn.Module):
     for param in module.parameters():
@@ -124,15 +124,16 @@ class PixelWiseModel(Model, SegmentationModel):
         input_size = get_image_size(x)
 
         features = self.encoder(x, **kwargs)
-
         features = self.neck(features, image_size=input_size)
 
         decoder_output = self.decoder([f.clone() for f in features])
         mask = self.head(decoder_output)
+
         if self.rescale and mask.shape[-2:] != input_size:
             mask = F.interpolate(mask, size=input_size, mode="bilinear")
+
         mask = self._check_for_single_channel_and_squeeze(mask)
-        mask = mask[..., :image_size_out[0], :image_size_out[1]]
+        mask = center_crop(mask, image_size_out)
 
         aux_outputs = {}
         for name, decoder in self.aux_heads.items():
@@ -140,7 +141,7 @@ class PixelWiseModel(Model, SegmentationModel):
             if self.rescale and aux_output.shape[-2:] != input_size:
                 aux_output = F.interpolate(aux_output, size=input_size, mode="bilinear")
             aux_output = self._check_for_single_channel_and_squeeze(aux_output)
-            aux_output = aux_output[..., :image_size_out[0], :image_size_out[1]]
+            aux_output = center_crop(aux_output, image_size_out)
             aux_outputs[name] = aux_output
 
 

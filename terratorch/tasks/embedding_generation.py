@@ -396,7 +396,6 @@ class EmbeddingGenerationTask(TerraTorchTask):
         """Write a single sample to GeoParquet."""
         filename = Path(filename).stem
         out_path = dir_path / f"{filename}_embedding.parquet"
-        print(arr.size)
         row = {"embedding": arr.tolist()}
         row.update({k: (v.tolist() if v.ndim else v.item()) for k, v in metadata.items()})
 

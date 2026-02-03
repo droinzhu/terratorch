@@ -22,7 +22,7 @@ from terratorch.vllm.plugins import generate_datamodule
 import uuid
 import warnings
 from vllm.config import VllmConfig
-from vllm.entrypoints.openai.protocol import (IOProcessorRequest,
+from vllm.entrypoints.pooling.pooling.protocol import (IOProcessorRequest,
                                               IOProcessorResponse)
 from vllm.inputs.data import PromptType
 from vllm.outputs import PoolingRequestOutput

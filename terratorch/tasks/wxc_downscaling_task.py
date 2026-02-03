@@ -105,6 +105,7 @@ class WxCDownscalingTask(BaseTask):
 
         self.model_factory = MODEL_FACTORY_REGISTRY.build(model_factory)
         self.model_config = model_config
+        self.model_args = model_args
         # TODO Unify it with self.hparams
         self.extended_hparams = self.model_config.to_dict()
         super().__init__()

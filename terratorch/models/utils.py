@@ -41,6 +41,12 @@ def get_image_size(x):
     else:
         raise ValueError('Could not infer image shape. Expecting tensor or dict of tensors.')
 
+def center_crop(x: torch.Tensor, out_size: tuple[int, int]) -> torch.Tensor:
+    h_out, w_out = out_size
+    h, w = x.shape[-2], x.shape[-1]
+    top = max((h - h_out) // 2, 0)
+    left = max((w - w_out) // 2, 0)
+    return x[..., top:top + h_out, left:left + w_out]
 
 def pad_images(imgs: torch.Tensor | dict[str, torch.Tensor], patch_size: int | list, padding: str
                ) -> torch.Tensor | dict[str, torch.Tensor]:

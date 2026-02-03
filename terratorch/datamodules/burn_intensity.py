@@ -3,7 +3,7 @@ from typing import Any
 
 import albumentations as A
 
-from terratorch.datamodules.utils import NormalizeWithTimesteps, wrap_in_compose_is_list
+from terratorch.datamodules.utils import Normalize, wrap_in_compose_is_list
 from terratorch.datasets import BurnIntensityNonGeo
 from torchgeo.datamodules import NonGeoDataModule
 
@@ -72,7 +72,7 @@ class BurnIntensityNonGeoDataModule(NonGeoDataModule):
         self.val_transform = wrap_in_compose_is_list(val_transform)
         self.test_transform = wrap_in_compose_is_list(test_transform)
         self.predict_transform = wrap_in_compose_is_list(predict_transform)
-        self.aug = NormalizeWithTimesteps(means, stds)
+        self.aug = Normalize(means, stds)
         self.use_full_data = use_full_data
         self.no_data_replace = no_data_replace
         self.no_label_replace = no_label_replace

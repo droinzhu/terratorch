@@ -21,18 +21,13 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from torchgeo.datamodules import NonGeoDataModule
 
-from terratorch.datamodules.utils import wrap_in_compose_is_list
+from terratorch.datamodules.utils import Normalize, wrap_in_compose_is_list
 from terratorch.datasets import GenericNonGeoPixelwiseRegressionDataset, GenericNonGeoSegmentationDataset, HLSBands
 from terratorch.io.file import load_from_file_or_attribute
 
 from .utils import check_dataset_stackability
 
 logger = logging.getLogger("terratorch")
-
-
-def wrap_in_compose_is_list(transform_list):
-    # set check shapes to false because of the multitemporal case
-    return A.Compose(transform_list, is_check_shapes=False) if isinstance(transform_list, Iterable) else transform_list
 
 
 # def collate_fn_list_dicts(batch):
@@ -46,32 +41,6 @@ def wrap_in_compose_is_list(transform_list):
 #     if len(batch["image"]) != len(batch["metadata"]):
 #         print(len(batch["image"]), len(batch["metadata"]))
 #     return batch
-
-
-class Normalize(Callable):
-    def __init__(self, means, stds):
-        super().__init__()
-        self.means = means
-        self.stds = stds
-
-    def __call__(self, batch, denormalize=False):
-        image = batch["image"]
-        if len(image.shape) == 5:
-            # B, C, T, H, W
-            means = torch.tensor(self.means, device=image.device).view(1, -1, 1, 1, 1)
-            stds = torch.tensor(self.stds, device=image.device).view(1, -1, 1, 1, 1)
-        elif len(image.shape) == 4:
-            # B, C, H, W
-            means = torch.tensor(self.means, device=image.device).view(1, -1, 1, 1)
-            stds = torch.tensor(self.stds, device=image.device).view(1, -1, 1, 1)
-        else:
-            msg = f"Expected batch to have 5 or 4 dimensions, but got {len(image.shape)}"
-            raise Exception(msg)
-        if denormalize:
-            batch["image"] = image * stds + means
-        else:
-            batch["image"] = (image - means) / stds
-        return batch
 
 
 class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
@@ -107,9 +76,9 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
         predict_output_bands: list[HLSBands | int | tuple[int, int] | str] | None = None,
         constant_scale: float = 1,
         rgb_indices: list[int] | None = None,
-        train_transform: list[Any] | bool | None = None,
-        val_transform: list[Any] | bool | None = None,
-        test_transform: list[Any] | bool | None = None,
+        train_transform: list[Any] | None = None,
+        val_transform: list[Any] | None = None,
+        test_transform: list[Any] | None = None,
         expand_temporal_dimension: bool = False,
         reduce_zero_label: bool = False,
         no_data_replace: float | None = None,

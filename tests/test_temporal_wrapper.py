@@ -66,7 +66,7 @@ def test_subset_lengths_aggregation_diff(dummy_encoder):
 
 def test_invalid_subset_lengths_for_diff(dummy_encoder):
     # check that diff pooling supports exactly two subsets
-    B, C, T, H, W = 1, 3, 3, 8, 8
+    B, C, T, H, W = 1, 3, 2, 8, 8
     x = torch.randn(B, C, T, H, W)
 
     with pytest.raises(ValueError, match="exactly two subsets"):
@@ -186,7 +186,7 @@ def test_encoder_returning_dict_modalities(dummy_dict_encoder):
       - Per-modality shape, pooling, and postprocess logic
       - All modalities preserved
     """
-    B, C, T, H, W = 2, 3, 4, 16, 16
+    B, C, T, H, W = 1, 3, 2, 16, 16
     x = torch.randn(B, C, T, H, W)
     wrapper = TemporalWrapper(dummy_dict_encoder, pooling="mean")
 
@@ -211,7 +211,7 @@ def test_temporal_wrapper_pooling_modes():
       - Output list consistency and shape validation
       - features_permute_op for Swin backbones
     """
-    batch_size, timesteps = 2, 4 # Randomly chosen
+    batch_size, timesteps = 1, 2 # Randomly chosen
 
 
     # CNN-like backbone (ResNet18)
@@ -219,7 +219,7 @@ def test_temporal_wrapper_pooling_modes():
     encoder = BACKBONE_REGISTRY.build("timm_resnet18")
 
     # Sample (B,C,T,H,W) input
-    x = torch.randn(batch_size, 3, timesteps, 224, 224)
+    x = torch.randn(batch_size, 3, timesteps, 128, 128)
 
     for pooling in ["mean", "max", "concat", "diff"]:
         wrapper = TemporalWrapper(encoder,
@@ -233,7 +233,7 @@ def test_temporal_wrapper_pooling_modes():
         assert len(output) == 5 #Expect a list of 5 outputs (intermediate layers)
 
         expected_c = encoder.out_channels[0] * timesteps if pooling == "concat" else encoder.out_channels[0] #Concat keeps timesteps and appends along channel dim, hence we multiply expected channel count by number of input timesteps
-        assert output[0].shape == (batch_size, expected_c, 112, 112)
+        assert output[0].shape == (batch_size, expected_c, 64, 64)
         gc.collect()
 
 
@@ -297,7 +297,7 @@ def test_temporal_wrapper_pooling_modes():
     #
     encoder = BACKBONE_REGISTRY.build("prithvi_swin_B", out_indices=[0, 1, 2, 3])
     n_channels = 6
-    x = torch.randn(batch_size, n_channels, timesteps, 224, 224)
+    x = torch.randn(batch_size, n_channels, timesteps, 128, 128)
 
     for pooling in ["mean", "max", "concat", "diff"]:
 
@@ -317,7 +317,7 @@ def test_temporal_wrapper_pooling_modes():
         else:
             expected_c = encoder.out_channels[0]
 
-        assert output[0].shape == (batch_size, 56, 56, expected_c)
+        assert output[0].shape == (batch_size, 32, 32, expected_c)
         gc.collect()
 
 
@@ -330,7 +330,7 @@ def test_temporal_encoder_decoder_factory(pooling):
     Verifies that temporal pooling options ('mean', 'concat') correctly integrate
     into an end-to-end classification pipeline using a lightweight Terramind encoder.
     """
-    batch_size, n_channels, timesteps, height, width = 2, 12, 3, 224, 224
+    batch_size, n_channels, timesteps, height, width = 1, 12, 2, 128, 128
 
     model = EncoderDecoderFactory().build_model(
         task="classification",
@@ -368,9 +368,9 @@ def test_temporal_wrapper_subset_diff_full():
         necks=[{"name": "AggregateTokens"}],
     )
 
-    x = torch.randn(2, 12, 3, 224, 224)
+    x = torch.randn(1, 12, 3, 128, 128)
     out = model(x).output
 
-    assert out.shape == (2, 2)
+    assert out.shape == (1, 2)
 
     gc.collect()

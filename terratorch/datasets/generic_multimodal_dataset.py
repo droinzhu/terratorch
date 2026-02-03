@@ -68,6 +68,7 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
         no_data_replace: float | None = None,
         no_label_replace: float | None = -1,
         expand_temporal_dimension: bool = False,
+        temporal_channel_major: bool = False,
         reduce_zero_label: bool = False,
         channel_position: int = -3,
         scalar_label: bool = False,
@@ -123,7 +124,8 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
                 format <prefix><image_grep> without any wildcards (*), e.g. sample1_s2l2a.tif. Defaults to False.
             expand_temporal_dimension (bool): Go from shape (time*channels, h, w) to (channels, time, h, w).
                 Only works with image modalities. Is only applied to modalities with defined dataset_bands.
-                Defaults to False.
+                Defaults to False. Assumes bands are grouped by time (all bands of one timestep are stacked together), otherwise set temporal_channel_major=True.
+            temporal_channel_major: Used for expand_temporal_dimension, set True if bands are grouped by channel (all timesteps of one band are stacked together).
             reduce_zero_label (bool): Subtract 1 from all labels. Useful when labels start from 1 instead of the
                 expected 0. Defaults to False.
             channel_position (int): Position of the channel dimension in the image modalities. Defaults to -3.
@@ -150,6 +152,7 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
         self.no_label_replace = no_label_replace
         self.reduce_zero_label = reduce_zero_label
         self.expand_temporal_dimension = expand_temporal_dimension
+        self.temporal_channel_major = temporal_channel_major
         self.channel_position = channel_position
         self.scalar_label = scalar_label
         self.data_with_sample_dim = data_with_sample_dim
@@ -162,9 +165,19 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
             not self.concat_bands or not allow_missing_modalities
         ), "concat_bands cannot be used with allow_missing_modalities."
 
-        if self.expand_temporal_dimension and dataset_bands is None:
-            msg = "Please provide dataset_bands when expand_temporal_dimension is True"
-            raise Exception(msg)
+        if self.expand_temporal_dimension:
+            if not self.temporal_channel_major:
+                warnings.warn(
+                    "expand_temporal_dimension=True assumes bands are grouped by time "
+                    "(all bands of one timestep are stacked together). "
+                    "If instead bands are grouped by channel "
+                    "(all timesteps of one band are stacked together), "
+                    "set temporal_channel_major=True.")
+
+            if dataset_bands is None:
+                raise ValueError(
+                    "Please provide dataset_bands when expand_temporal_dimension=True."
+                )
 
         if scalar_label:
             self.non_image_modalities += ["label"]
@@ -377,9 +390,15 @@ class GenericMultimodalDataset(NonGeoDataset, ABC):
 
             # Expand temporal dim
             if modality in self.filter_indices and self.expand_temporal_dimension:
-                data = rearrange(
-                    data, "(channels time) h w -> channels time h w", channels=len(self.dataset_bands[modality])
-                )
+                if self.temporal_channel_major:
+                    data = rearrange(
+                        data, "(channels time) h w -> channels time h w", channels=len(self.dataset_bands[modality])
+                    )
+                else:
+                    data = rearrange(
+                        data, "(time channels) h w -> channels time h w", channels=len(self.dataset_bands[modality])
+                    )
+
 
             if modality == "mask" and not self.scalar_label:
                 # tasks expect image masks without channel dim

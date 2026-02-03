@@ -77,6 +77,7 @@ class ReconstructionTask(BaseTask):
         """
         self.tiled_inference_parameters = tiled_inference_parameters
         self.model_factory = MODEL_FACTORY_REGISTRY.build(model_factory)
+        self.model_args = model_args
         self.modalities = modalities
         self.ignore_index = ignore_index
         self.masked_metric = masked_metric

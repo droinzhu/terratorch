@@ -14,13 +14,16 @@ from .config import models, inputs
 # Each model has a different output depending also on the plugin
 models_output = {
     "prithvi_300m_sen1floods11": {
-            "india_url_in_base64_out": "f7dc282de2c36942",
-            "valencia_url_in_base64_out": "aa6d92ad25926a5e",
-            "valencia_url_in_path_out": "aa6d92ad25926a5e",
-        },
+        "india_url_in_base64_out": "f7dc282de2c36942",
+        "valencia_url_in_base64_out": "aa6d92ad25926a5e",
+        "valencia_url_in_path_out": "aa6d92ad25926a5e",
+    },
     "prithvi_300m_burnscars": {
         "burnscars_url_in_base64_out": "c17c4f602ea7b616",
         "burnscars_url_in_path_out": "c17c4f602ea7b616"
+    },
+    "terramind_base_flood": {
+        "terramind_base_flood_url_in_path_out": "dc25fd8e31cc0a72",
     }
 }
 
@@ -64,10 +67,10 @@ def get_server(server):
 )
 def test_serving_segmentation_plugin(get_server, model_name, input_name):
     model = models[model_name]["location"]
+    io_processor_plugin = models[model_name]["io_processor_plugin"]
     input = inputs[input_name]
 
     image_url = input["image_url"]
-    plugin = "terratorch_segmentation"
     server_args = [
         "--skip-tokenizer-init",
         "--enforce-eager",
@@ -76,9 +79,10 @@ def test_serving_segmentation_plugin(get_server, model_name, input_name):
         "--max-num-seqs",
         "8",
         "--io-processor-plugin",
-        plugin,
+        io_processor_plugin,
         "--model-impl",
         "terratorch",
+        "--enable-mm-embeds"
     ]
 
     server = get_server(model, server_args=server_args)

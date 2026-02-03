@@ -53,7 +53,7 @@ class TerraTorchTask(BaseTask):
             return
 
         self.model: Model = self.model_factory.build_model(
-            self.task, aux_decoders=self.aux_heads, **self.hparams["model_args"]
+            self.task, aux_decoders=self.aux_heads, **self.model_args
         )
 
         if self.hparams["freeze_backbone"]:

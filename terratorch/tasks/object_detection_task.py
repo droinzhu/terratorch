@@ -96,6 +96,7 @@ class ObjectDetectionTask(BaseTask):
         warnings.warn("The Object Detection Task has to be considered experimental. This is less mature than the other tasks and being further improved.")
         
         self.model_factory = MODEL_FACTORY_REGISTRY.build(model_factory)
+        self.model_args = model_args
         self.framework = model_args['framework']
         self.monitor = 'val_segm_map' if self.framework == 'mask-rcnn' else self.monitor
         

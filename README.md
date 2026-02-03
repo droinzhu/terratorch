@@ -130,7 +130,14 @@ It will sign the commit with your ID and the check will be met.
 
 ## Credits
 
-TerraTorch is supported by the EU’s Horizon Europe program under Grant Agreement number 101131841 and also received funding from the Swiss State Secretariat for Education, Research and Innovation (SERI) and the UK Research and Innovation (UKRI).
+<img src="assets/embed2scale_logo.svg"
+   alt="Embed2Scale"
+   height="62"
+   style="vertical-align: middle; margin-right: 6px;" />
+<strong>Embed2Scale.</strong>
+The embedding workflow integration and maintenance in TerraTorch are carried out as part of the Embed2Scale project
+(Earth Observation & Weather Data Federation with AI Embeddings), funded by the EU’s Horizon Europe programme
+(Grant Agreement No. 101131841), with additional support from SERI and UKRI.
 
 
 ## License

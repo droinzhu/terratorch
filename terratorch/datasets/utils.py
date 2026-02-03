@@ -229,12 +229,36 @@ def clip_image_percentile(img: np.ndarray, q_lower: float = 1, q_upper: float = 
     return img
 
 
-def to_rgb(image_chw: np.ndarray, rgb_indices: list[int]) -> np.ndarray:
-    """Convert a channel-first image (C, H, W) to an RGB image for visualization."""
+def to_rgb(image_chw: np.ndarray,
+    rgb_indices: list[int],
+    p_low: float = 0.0,
+    p_high: float = 99.0,
+    gamma: float = 0.7,
+    eps: float = 1e-6,) -> np.ndarray:
+    """
+    Convert a channel-first image (C, H, W) to an RGB image for visualization.
+
+    Args:
+        image_chw: Input image in (C, H, W) format.
+        rgb_indices: Indices of channels to use as R, G, B.
+        p_low: Lower percentile for contrast stretching.
+        p_high: Upper percentile for contrast stretching.
+        gamma: Gamma correction applied after normalization.
+        eps: Small constant to avoid division by zero.
+
+    Returns:
+        RGB image in (H, W, 3) with values in [0, 1].
+    """
 
     img = image_chw.take(rgb_indices, axis=0)
     img = np.transpose(img, (1, 2, 0))
-    img = img / np.quantile(img, q=0.99, axis=(0, 1), keepdims=True)
+    lo = np.percentile(img, p_low, axis=(0, 1), keepdims=True)
+    hi = np.percentile(img, p_high, axis=(0, 1), keepdims=True)
+
+    img = (img - lo) / (hi - lo + eps)
+
+    if gamma is not None:
+        img = np.power(img, gamma)
 
     return np.clip(img, 0, 1)
 

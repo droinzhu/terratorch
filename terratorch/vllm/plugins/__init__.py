@@ -52,7 +52,6 @@ def generate_datamodule(datamodule_args: dict[str: Any]) -> BaseDataModule:
 
         resolved_init_args["val_transform"] = val_transforms
 
-    print(resolved_init_args)
     datamodule_class = get_class_from_path(datamodule_class_path)
     datamodule = datamodule_class(**resolved_init_args)
 
