@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -926,6 +926,8 @@
       
         
       
+        
+      
     
     
     
@@ -1058,7 +1060,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vllm/vllm_io_plugins" class="md-nav__link">
+      <a href="../vllm/vllm_io_plugins/" class="md-nav__link">
         
   
   
@@ -1211,14 +1213,42 @@
   
   
     <li class="md-nav__item">
-      <a href="../vllm/serving_a_model/" class="md-nav__link">
+      <a href="../vllm/serving_a_model_tensor/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Initializing and serving a model with vLLM
+    Initializing and serving a model with vLLM in tenosr-to-tensor mode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vllm/serving_a_model_image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Initializing and serving a model with vLLM in image-to-image mode
   
 
     
@@ -2613,7 +2643,7 @@ These are experimental and not publicly released. It supports only <code>S2L2A</
 By default, the encoder merges the embeddings across image modalities by averaging (<code>mean</code>). Another approach can be selected with <code>merge_method</code>:
 <code>max</code> takes the maximum value over all image modality while <code>concat</code> concatenates the modalities along the embedding dimension which increases the decoder input.
 In a custom python script, you can also use <code>dict</code> which returns a dictionary with all embeddings rather than a tensor, or <code>None</code> which keeps the modalities as seperated tokens.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span> <span class="nn">terratorch.registry</span> <span class="kn">import</span> <span class="n">BACKBONE_REGISTRY</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">terratorch.registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">BACKBONE_REGISTRY</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">model</span> <span class="o">=</span> <span class="n">BACKBONE_REGISTRY</span><span class="o">.</span><span class="n">build</span><span class="p">(</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="s2">&quot;terramind_v1_base&quot;</span><span class="p">,</span> <span class="n">pretrained</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">modalities</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;S2L2A&quot;</span><span class="p">,</span> <span class="s2">&quot;S1GRD&quot;</span><span class="p">],</span>
@@ -2699,8 +2729,8 @@ During training, modalities are randomly dropped according to the rate (e.g., wi
 <p>The model expects the input as a dict <code>model({"mod1": input1, "mod2": input2, ...})</code> or as keyword args <code>model(mod1=input1, mod2=input2)</code> with inputs being torch tensors.
 If you only use a single modality, you can pass the input direct as a tensor <code>model(input1)</code>.
 In TerraTorch, single modality data modules such as the <code>GenericNonGeoSegmentationDataModule</code> us the latter option, while the <code>GenericMultiModalDataModule</code> loads the inputs as a dictionary by default.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">import</span> <span class="nn">torch</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="kn">from</span> <span class="nn">terratorch.registry</span> <span class="kn">import</span> <span class="n">BACKBONE_REGISTRY</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">terratorch.registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">BACKBONE_REGISTRY</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">model</span> <span class="o">=</span> <span class="n">BACKBONE_REGISTRY</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="s2">&quot;terramind_v1_base&quot;</span><span class="p">,</span> <span class="n">pretrained</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">modalities</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;S2L2A&quot;</span><span class="p">,</span> <span class="s2">&quot;S1GRD&quot;</span><span class="p">])</span>
 </span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
@@ -3019,7 +3049,7 @@ You can use TerraTorch's large-tile-inference to generate images of larger scene
 <hr />
 <h2 id="tokenizers">Tokenizers<a class="headerlink" href="#tokenizers" title="Permanent link">#</a></h2>
 <p>Initialize tokenizers from <code>FULL_MODEL_REGISTRY</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="kn">from</span> <span class="nn">terratorch.registry</span> <span class="kn">import</span> <span class="n">FULL_MODEL_REGISTRY</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">terratorch.registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">FULL_MODEL_REGISTRY</span>
 </span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>
 </span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="n">model</span> <span class="o">=</span> <span class="n">FULL_MODEL_REGISTRY</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="s1">&#39;terramind_v1_tokenizer_s2l2a&#39;</span><span class="p">,</span> <span class="n">pretrained</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </span></code></pre></div>
@@ -3159,10 +3189,10 @@ You can use TerraTorch's large-tile-inference to generate images of larger scene
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "content.code.select", "announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.code.select", "content.footnote.tooltips", "content.tabs.link", "content.tooltips", "navigation.footer", "navigation.indexes", "navigation.path", "navigation.instant", "navigation.instant.prefetch", "navigation.instant.progress", "navigation.sections", "navigation.top", "navigation.tracking", "search.highlight", "search.share", "search.suggest", "toc.follow", "toc.integrate"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"canonical_version": "stable", "default": "stable", "provider": "mike", "version_selector": true}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "content.code.select", "announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.code.select", "content.footnote.tooltips", "content.tabs.link", "content.tooltips", "navigation.footer", "navigation.indexes", "navigation.path", "navigation.instant", "navigation.instant.prefetch", "navigation.instant.progress", "navigation.sections", "navigation.top", "navigation.tracking", "search.highlight", "search.share", "search.suggest", "toc.follow", "toc.integrate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"canonical_version": "stable", "default": "stable", "provider": "mike", "version_selector": true}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
         <script src="../../js/logo.js"></script>
       
