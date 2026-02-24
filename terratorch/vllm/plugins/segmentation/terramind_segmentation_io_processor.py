@@ -22,6 +22,7 @@ from vllm.plugins.io_processors.interface import IOProcessor, IOProcessorInput, 
 from terratorch.tasks.tiled_inference import generate_tiled_inference_output, prepare_tiled_inference_input
 from terratorch.vllm.plugins import generate_datamodule
 from terratorch.cli_tools import write_tiff
+from terratorch.vllm.utils import check_vllm_version
 from .utils import download_file_async, get_filename_from_url, path_or_tmpdir, to_base64_tiff
 
 from .types import PluginConfig, RequestData, RequestOutput, TiledInferenceParameters
@@ -146,7 +147,7 @@ class TerramindSegmentationIOProcessor(IOProcessor):
         # Just run the async function froma. synchronous context.
         # Since we are already in the vLLM server event loop we use that one.
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.pre_process_async(prompt, request_id, **kwargs))
+        return loop.run_until_complete(self.pre_process_async(prompt, request_id, **kwargs))
 
 
     async def pre_process_async(
@@ -193,10 +194,17 @@ class TerramindSegmentationIOProcessor(IOProcessor):
         for tile in prompt_data:
             reshaped_tile = tensor_reshape_fn(tile.input_data)
             # TODO: Check if there's a better way of getting the data in the correct data type ouf of the box.
-            vllm_input = {mod: tensor.to(torch.float16) for mod, tensor in reshaped_tile.items()}
+            multi_modal_data = {mod: tensor.to(torch.float16) for mod, tensor in reshaped_tile.items()}
+
+            # after v0.14.0 vLLM has changed the input structure for multimodal data
+            if check_vllm_version("0.14.0", ">"):
+                multi_modal_data = {
+                    "image": multi_modal_data
+                }
+
             prompt = {
                 "prompt_token_ids": [1],
-                "multi_modal_data": vllm_input
+                "multi_modal_data": multi_modal_data
             }
 
             prompts.append(prompt)

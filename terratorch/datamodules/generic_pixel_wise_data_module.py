@@ -10,18 +10,19 @@ from albumentations.core.composition import BaseCompose
 from albumentations.core.composition import Compose
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Hashable, List, Optional
 
 import albumentations as A
 import kornia.augmentation as K
 import numpy as np
+import tacoreader
 import torch
 from kornia.augmentation import AugmentationSequential
 from torch import Tensor
 from torch.utils.data import DataLoader
-from torchgeo.datamodules import NonGeoDataModule
+from torchgeo.datamodules import MisconfigurationException, NonGeoDataModule
 
-from terratorch.datamodules.utils import wrap_in_compose_is_list
+from terratorch.datamodules.utils import Normalize, wrap_in_compose_is_list
 from terratorch.datasets import GenericNonGeoPixelwiseRegressionDataset, GenericNonGeoSegmentationDataset, HLSBands
 from terratorch.io.file import load_from_file_or_attribute
 
@@ -43,32 +44,6 @@ logger = logging.getLogger("terratorch")
 #     return batch
 
 
-class Normalize(Callable):
-    def __init__(self, means, stds):
-        super().__init__()
-        self.means = means
-        self.stds = stds
-
-    def __call__(self, batch, denormalize=False):
-        image = batch["image"]
-        if len(image.shape) == 5:
-            # B, C, T, H, W
-            means = torch.tensor(self.means, device=image.device).view(1, -1, 1, 1, 1)
-            stds = torch.tensor(self.stds, device=image.device).view(1, -1, 1, 1, 1)
-        elif len(image.shape) == 4:
-            # B, C, H, W
-            means = torch.tensor(self.means, device=image.device).view(1, -1, 1, 1)
-            stds = torch.tensor(self.stds, device=image.device).view(1, -1, 1, 1)
-        else:
-            msg = f"Expected batch to have 5 or 4 dimensions, but got {len(image.shape)}"
-            raise Exception(msg)
-        if denormalize:
-            batch["image"] = image * stds + means
-        else:
-            batch["image"] = (image - means) / stds
-        return batch
-
-
 class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
     """
     This is a generic datamodule class for instantiating data modules at runtime.
@@ -79,10 +54,10 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
         self,
         batch_size: int,
         num_workers: int,
-        train_data_root: Path,
-        val_data_root: Path,
-        test_data_root: Path,
         num_classes: int,
+        train_data_root: Path | None = None,
+        val_data_root: Path | None = None,
+        test_data_root: Path | None = None,
         img_grep: str = "*",
         label_grep: str = "*",
         means: list[float] | str | None = None,
@@ -114,6 +89,8 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
         drop_last: bool = True,
         pin_memory: bool = False,
         check_stackability: bool = True,
+        tortilla_file: Path | None = None,
+        return_georeference: bool = False,
         **kwargs: Any,
     ) -> None:
         """Constructor
@@ -180,6 +157,9 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
             pin_memory (bool): If ``True``, the data loader will copy Tensors
             into device/CUDA pinned memory before returning them. Defaults to False.
             check_stackability (bool): Check if all the files in the dataset has the same size and can be stacked.
+            tortilla_file (Path | None): Path to a tortilla file. If provided, the dataset will be loaded from the tortilla file. Defaults to None.
+            return_georeference (bool): Whether to return georeference metadata info (CRS, Bounds, ...). Defaults to False.
+
         """
         super().__init__(GenericNonGeoSegmentationDataset, batch_size, num_workers, **kwargs)
         self.num_classes = num_classes
@@ -213,6 +193,7 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
         self.pca_step = pca_step
         self.expand_temporal_dimension = expand_temporal_dimension
         self.reduce_zero_label = reduce_zero_label
+        self.return_georeference = return_georeference
 
         self.train_transform = wrap_in_compose_is_list(train_transform)
         self.val_transform = wrap_in_compose_is_list(val_transform)
@@ -234,6 +215,29 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
         # self.collate_fn = collate_fn_list_dicts
 
         self.check_stackability = check_stackability
+
+        if tortilla_file is None and not all([
+            train_data_root, 
+            val_data_root, 
+            test_data_root
+            ]
+        ):
+            raise MisconfigurationException("Either provide tortilla_file OR all train/val/test roots.")
+
+        self.tortilla_df = tacoreader.load(str(tortilla_file)) if tortilla_file is not None else None
+
+    def _get_tortilla_indices(self, stage: str) -> list[Hashable] | None:
+        if self.tortilla_df is None:
+            return None
+
+        if stage in ["fit"]:
+            return [i for i, row in self.tortilla_df.iterrows() if row["tortilla:data_split"] == "train"]
+        if stage in ["validate"]:
+            return [i for i, row in self.tortilla_df.iterrows() if row["tortilla:data_split"] == "validation"]
+        if stage in ["test"]:
+            return [i for i, row in self.tortilla_df.iterrows() if row["tortilla:data_split"] == "test"]
+
+        return None
 
     def setup(self, stage: str) -> None:
         if stage in ["fit"]:
@@ -257,6 +261,9 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
                 pca_step=self.pca_step,
                 expand_temporal_dimension=self.expand_temporal_dimension,
                 reduce_zero_label=self.reduce_zero_label,
+                tortilla_df=self.tortilla_df,
+                tortilla_indices=self._get_tortilla_indices(stage),
+                return_georeference = self.return_georeference
             )
         if stage in ["fit", "validate"]:
             self.val_dataset = self.dataset_class(
@@ -279,6 +286,9 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
                 pca_step=self.pca_step,
                 expand_temporal_dimension=self.expand_temporal_dimension,
                 reduce_zero_label=self.reduce_zero_label,
+                tortilla_df=self.tortilla_df,
+                tortilla_indices=self._get_tortilla_indices(stage),
+                return_georeference=self.return_georeference
             )
         if stage in ["test"]:
             self.test_dataset = self.dataset_class(
@@ -301,6 +311,9 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
                 pca_step=self.pca_step,
                 expand_temporal_dimension=self.expand_temporal_dimension,
                 reduce_zero_label=self.reduce_zero_label,
+                tortilla_df=self.tortilla_df,
+                tortilla_indices=self._get_tortilla_indices(stage),
+                return_georeference=self.return_georeference
             )
         if stage in ["predict"] and self.predict_root:
             self.predict_dataset = self.dataset_class(
@@ -319,6 +332,7 @@ class GenericNonGeoSegmentationDataModule(NonGeoDataModule):
                 pca_step=self.pca_step,
                 expand_temporal_dimension=self.expand_temporal_dimension,
                 reduce_zero_label=self.reduce_zero_label,
+                return_georeference=self.return_georeference
             )
 
     def _dataloader_factory(self, split: str) -> DataLoader[dict[str, Tensor]]:

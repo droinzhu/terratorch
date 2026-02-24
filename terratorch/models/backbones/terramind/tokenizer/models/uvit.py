@@ -1076,4 +1076,3 @@ def uvit_l_p4_f16_extraconv(**kwargs):
         mid_qkv_bias=True,
         **kwargs
     )
-

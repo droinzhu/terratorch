@@ -19,6 +19,7 @@ import torch
 from einops import rearrange
 import logging
 from terratorch.vllm.plugins import generate_datamodule
+from terratorch.vllm.utils import check_vllm_version
 import uuid
 import warnings
 from vllm.config import VllmConfig
@@ -325,7 +326,7 @@ class SegmentationIOProcessor(IOProcessor):
         # Just run the async function froma. synchronous context.
         # Since we are already in the vLLM server event loop we use that one.
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.pre_process_async(prompt, request_id, **kwargs))
+        return loop.run_until_complete(self.pre_process_async(prompt, request_id, **kwargs))
 
 
     async def pre_process_async(
@@ -414,16 +415,23 @@ class SegmentationIOProcessor(IOProcessor):
                 window["image"] = window["image"][None, :, :, :]
                 window = self.datamodule.aug(window)["image"]
 
-            prompt = {
-                "prompt_token_ids": [1],
-                "multi_modal_data": {
-                    "pixel_values": window.to(torch.float16)[0],
-                }
+            multi_modal_data = {
+                "pixel_values": window.to(torch.float16)[0],
             }
-
             # not all models use location coordinates, so we don't bother sending them to vLLM if not needed
             if "location_coords" in self.model_config["input"]["data"]:
-                prompt["multi_modal_data"]["location_coords"] = location_coords
+                multi_modal_data["location_coords"] = location_coords
+
+            # after v0.14.0 vLLM has changed the input structure for multimodal data
+            if check_vllm_version("0.14.0", ">"):
+                multi_modal_data = {
+                    "image": multi_modal_data
+                }
+
+            prompt = {
+                "prompt_token_ids": [1],
+                "multi_modal_data": multi_modal_data
+            }
 
             prompts.append(prompt)
 

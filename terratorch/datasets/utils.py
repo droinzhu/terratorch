@@ -1,6 +1,7 @@
 # Copyright contributors to the Terratorch project
 
 import os
+from pathlib import Path
 from collections.abc import Iterator, Sequence
 from enum import Enum
 from functools import partial
@@ -10,6 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from sklearn.decomposition import PCA
+import rasterio
 
 
 class HLSBands(Enum):
@@ -309,3 +311,23 @@ def resize_hwc(img_hwc: np.ndarray, size_hw: tuple[int, int]) -> np.ndarray:
     )
 
     return img_resized.squeeze(0).permute(1, 2, 0).numpy()  # (H, W, C)
+
+def extract_georeference(path: Path) -> dict[str, Any] | None:
+    """
+    Returns georeference needed to align rasters for embedding generation in a collate-friendly format.
+    """
+    try:
+        with rasterio.open(path) as ds:
+            if ds.crs is None or ds.transform is None:
+                return None
+
+            t = ds.transform
+            left, bottom, right, top = ds.bounds
+            return {
+                "crs": ds.crs.to_string(),
+                "geotransform": np.array([t.c, t.a, t.b, t.f, t.d, t.e], dtype=np.float32),
+                "raster_shape": np.array([int(ds.height), int(ds.width)], dtype=np.float32),
+                "bounds": np.array([left, bottom, right, top], dtype=np.float32),
+            }
+    except Exception:
+        return None

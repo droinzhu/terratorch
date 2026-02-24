@@ -9,6 +9,29 @@ from pydantic import BaseModel
 from typing import List,Dict
 from enum import Enum
 
+from packaging import version
+from vllm import __version__ as vllm_version
+
+
+def check_vllm_version(target_version: str, comparison: str):
+    current_version = version.parse(vllm_version)
+    target = version.parse(target_version)
+
+    if comparison == "==":
+        return current_version == target
+    elif comparison == "!=":
+        return current_version != target
+    elif comparison == "<":
+        return current_version < target
+    elif comparison == "<=":
+        return current_version <= target
+    elif comparison == ">":
+        return current_version > target
+    elif comparison == ">=":
+        return current_version >= target
+    else:
+        raise ValueError(f"Invalid comparison operator: {comparison}")
+
 class InputTypeEnum(str, Enum):
     tensor= 'torch.Tensor'
 

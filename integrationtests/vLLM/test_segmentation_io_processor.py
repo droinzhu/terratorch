@@ -77,7 +77,7 @@ def test_serving_segmentation_plugin(get_server, model_name, input_name):
         # This is just in case the test ends up with a GPU of less memory than an A100-80GB.
         # Just to avoid OOMing in the CI
         "--max-num-seqs",
-        "8",
+        "32",
         "--io-processor-plugin",
         io_processor_plugin,
         "--model-impl",

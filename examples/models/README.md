@@ -14,6 +14,16 @@ terratorch fit -c path/to/config.yaml
 ```
 
 The notebook `models_notebook.ipynb` walks you through downloading the dataset and running one of the provided YAML configurations.
+### Understanding Model Abstraction Levels
+
+The notebook `models-abstraction.ipynb` shows how to use TerraTorch models at four different levels of abstraction:
+
+- **Level 1: Backbone Only** - Load backbones from BACKBONE_REGISTRY
+- **Level 2: Full Model** - Build complete models with EncoderDecoderFactory
+- **Level 3: Task Class** - Use task classes for structured model training and inference
+- **Level 4: Complete Pipeline** - Combine Task + DataModule + Trainer for end-to-end workflows
+
+The notebook also includes troubleshooting for common HuggingFace URL issues.
 
 Note:
 - For Prithvi models, see `examples/segmentation/segmentation_sen1floods11.ipynb`.

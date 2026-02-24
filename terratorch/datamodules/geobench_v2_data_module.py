@@ -58,6 +58,7 @@ class GeoBenchV2ClassificationDataModule(GeoBenchClassificationDataModule):
         num_workers: int = 0,
         train_augmentations: None | list[Union[GeometricAugmentationBase2D, K.VideoSequential, IntensityAugmentationBase2D]] | str = "default",
         eval_augmentations: None | list[Union[GeometricAugmentationBase2D, K.VideoSequential, IntensityAugmentationBase2D]] | str = "default",
+        predict_loader: str = 'test',
         **kwargs: Any,
     ):
         """Constructor
@@ -68,6 +69,7 @@ class GeoBenchV2ClassificationDataModule(GeoBenchClassificationDataModule):
             num_workers (int, optional): num_workers. Defaults to 0.
             transforms (None | list[Union[GeometricAugmentationBase2D, K.VideoSequential]], optional): List of Albumentations Transforms.
                 Should enc with ToTensorV2. Defaults to None.
+            predict_loader (str, optional): Selects whether predictions run on the train, val, or test split (default: "test").
             **kwargs (Any): Arguments passed to instantiate `cls`.
         """
         if isinstance(train_augmentations, str):
@@ -102,6 +104,7 @@ class GeoBenchV2ClassificationDataModule(GeoBenchClassificationDataModule):
                     kwargs["band_order"] = band_order
 
         self._proxy = cls(num_workers=num_workers, **kwargs)
+        self.predict_loader = predict_loader
         super().__init__(
             dataset_class = self._proxy.dataset_class, 
             img_size = img_size,
@@ -126,6 +129,14 @@ class GeoBenchV2ClassificationDataModule(GeoBenchClassificationDataModule):
 
     def test_dataloader(self):
         return self._proxy.test_dataloader()
+
+    def predict_dataloader(self):
+        if self.predict_loader == "train":
+            return self._proxy.train_dataloader()
+        elif self.predict_loader == "val":
+            return self._proxy.val_dataloader()
+        elif self.predict_loader == "test":
+            return self._proxy.test_dataloader()
 
     def _valid_attribute(self, *args: str):
         return self._proxy._valid_attribute(args)
@@ -159,6 +170,7 @@ class GeoBenchV2ObjectDetectionDataModule(GeoBenchObjectDetectionDataModule):
         eval_augmentations: None | list[Union[GeometricAugmentationBase2D, K.VideoSequential, IntensityAugmentationBase2D]] | str = "default",
         plot_indexes: list = [0,1,2],
         collate_fn: Callable = None,
+        predict_loader: str = 'test',
         **kwargs: Any,
     ):
         """Constructor
@@ -169,6 +181,7 @@ class GeoBenchV2ObjectDetectionDataModule(GeoBenchObjectDetectionDataModule):
             num_workers (int, optional): num_workers. Defaults to 0.
             transforms (None | list[Union[GeometricAugmentationBase2D, K.VideoSequential]], optional): List of Albumentations Transforms.
                 Should enc with ToTensorV2. Defaults to None.
+            predict_loader (str, optional): Selects whether predictions run on the train, val, or test split (default: "test").
             **kwargs (Any): Arguments passed to instantiate `cls`.
         """
         if isinstance(train_augmentations, str):
@@ -205,6 +218,7 @@ class GeoBenchV2ObjectDetectionDataModule(GeoBenchObjectDetectionDataModule):
                     kwargs["band_order"] = band_order
 
         self._proxy = cls(num_workers=num_workers, **kwargs)
+        self.predict_loader = predict_loader
         super().__init__(
             dataset_class = self._proxy.dataset_class, 
             img_size = img_size,
@@ -243,6 +257,14 @@ class GeoBenchV2ObjectDetectionDataModule(GeoBenchObjectDetectionDataModule):
 
     def test_dataloader(self):
         return self._proxy.test_dataloader()
+
+    def predict_dataloader(self):
+        if self.predict_loader == "train":
+            return self._proxy.train_dataloader()
+        elif self.predict_loader == "val":
+            return self._proxy.val_dataloader()
+        elif self.predict_loader == "test":
+            return self._proxy.test_dataloader()
 
     def _valid_attribute(self, *args: str):
         return self._proxy._valid_attribute(args)
@@ -444,6 +466,7 @@ class GeoBenchV2SegmentationDataModule(GeoBenchSegmentationDataModule):
         train_augmentations: None | list[Union[GeometricAugmentationBase2D, K.VideoSequential, IntensityAugmentationBase2D]] | str = "default",
         eval_augmentations: None | list[Union[GeometricAugmentationBase2D, K.VideoSequential, IntensityAugmentationBase2D]] | str = "default",
         collate_fn: Callable = None,
+        predict_loader: str = 'test',
         **kwargs: Any,
     ):
         """Constructor
@@ -454,6 +477,7 @@ class GeoBenchV2SegmentationDataModule(GeoBenchSegmentationDataModule):
             num_workers (int, optional): num_workers. Defaults to 0.
             transforms (None | list[Union[GeometricAugmentationBase2D, K.VideoSequential]], optional): List of Kornia Transforms.
                 Should enc with ToTensorV2. Defaults to None.
+            predict_loader (str, optional): Selects whether predictions run on the train, val, or test split (default: "test").
             **kwargs (Any): Arguments passed to instantiate `cls`.
         """
         if isinstance(train_augmentations, str):
@@ -513,6 +537,7 @@ class GeoBenchV2SegmentationDataModule(GeoBenchSegmentationDataModule):
                 kwargs["band_order"] = band_order
 
         self._proxy = cls(num_workers=num_workers, **kwargs)
+        self.predict_loader = predict_loader
 
         super().__init__(
             dataset_class = self._proxy.dataset_class, 
@@ -554,6 +579,14 @@ class GeoBenchV2SegmentationDataModule(GeoBenchSegmentationDataModule):
 
     def test_dataloader(self):
         return self._proxy.test_dataloader()
+
+    def predict_dataloader(self):
+        if self.predict_loader == "train":
+            return self._proxy.train_dataloader()
+        elif self.predict_loader == "val":
+            return self._proxy.val_dataloader()
+        elif self.predict_loader == "test":
+            return self._proxy.test_dataloader()
 
     def _valid_attribute(self, *args: str):
         return self._proxy._valid_attribute(args)
@@ -643,11 +676,3 @@ class GeoBenchV2SegmentationDataModule(GeoBenchSegmentationDataModule):
         except Exception as e:
             print(e)
             return None
-
-
-
-
-
-
-
-            
