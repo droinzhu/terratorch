@@ -31,22 +31,7 @@ jobs:
 
       - name: Build sdist and wheel
         run: python -m build --sdist --wheel
-
-      - name: Deploy Documentation
-        run: |
-          # Strip the 'v' from the tag (v1.2.2 -> 1.2.2)
-          VERSION=${GITHUB_REF_NAME#v}
-          
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          
-          # Fetch the docs branch to ensure mike can update it
-          git fetch origin docs:docs || true
-          
-          # Deploy versioned docs and update 'stable' alias
-          mike deploy --push --update-aliases --force $VERSION stable
-          mike set-default --push stable
-          
+       
       - name: Check artifacts
         run: ls -l dist
 
