@@ -891,11 +891,12 @@ def build_modality_embeddings(modality_info, modalities, cond_modalities=None, i
             continue
 
         # Cover multiple naming conventions
-        modality_renamed = (modality.lower()
-                            .replace("s2", "sen2")
-                            .replace("s1", "sen1")
-                            .replace("location", "coords")
-                            )
+        modality_renamed = (
+            modality.lower()
+            .replace("s2", "sen2")
+            .replace("s1", "sen1")
+            .replace("location", "coords")
+        )
 
         # Get modality key in MODALITY_INFO
         if modality in modality_info.keys():
@@ -931,11 +932,12 @@ def build_modality_embeddings(modality_info, modalities, cond_modalities=None, i
     if cond_modalities:
         for modality in cond_modalities:
             # Cover multiple naming conventions
-            modality_renamed = (modality.lower()
-                                .replace("s2", "sen2")
-                                .replace("s1", "sen1")
-                                .replace("location", "coords")
-                                )
+            modality_renamed = (
+                modality.lower()
+                .replace("s2", "sen2")
+                .replace("s1", "sen1")
+                .replace("location", "coords")
+            )
 
             # Get modality key in MODALITY_INFO
             if modality in modality_info.keys():
@@ -970,11 +972,12 @@ def build_output_modality_embeddings(modality_info, modalities, img_size=None, d
     mod_name_mapping = {}
     for modality in modalities:
         # Cover multiple naming conventions
-        modality_renamed = (modality.lower()
-                            .replace("s2", "sen2")
-                            .replace("s1", "sen1")
-                            .replace("location", "coords")
-                            )
+        modality_renamed = (
+            modality.lower()
+            .replace("s2", "sen2")
+            .replace("s1", "sen1")
+            .replace("location", "coords")
+        )
 
         # Get modality key in MODALITY_INFO
         if modality in modality_info.keys():
