@@ -9,7 +9,7 @@ from pathlib import Path
 import copy
 
 from collections.abc import Sequence
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, overload
 
 import rasterio
 import torch
@@ -23,6 +23,10 @@ from terratorch.tasks.tiled_inference import generate_tiled_inference_output, pr
 from terratorch.vllm.plugins import generate_datamodule
 from terratorch.cli_tools import write_tiff
 from terratorch.vllm.utils import check_vllm_version
+
+if check_vllm_version("0.16.0", ">"):
+    from vllm.renderers import BaseRenderer
+
 from .utils import download_file_async, get_filename_from_url, path_or_tmpdir, to_base64_tiff
 
 from .types import PluginConfig, RequestData, RequestOutput, TerramindSegmentationRequestInfo, TiledInferenceParameters
@@ -49,9 +53,24 @@ class TerramindSegmentationIOProcessor(IOProcessor):
     '/pooling' endpoint of a vLLM instance.
     """
 
-    def __init__(self, vllm_config: VllmConfig):
+    # The IO Processor plugin inerface requires the renderer argument after vLLM 0.16.0.
+    # Support for vLLM <= v0.16.0 is deprecated and will be removed in TerraTorch v1.6.0.
+    @overload
+    def __init__(self, vllm_config: VllmConfig, renderer: BaseRenderer) -> None: ...
 
-        super().__init__(vllm_config)
+    @overload
+    def __init__(self, vllm_config: VllmConfig) -> None: ...
+
+    def __init__(self, vllm_config: VllmConfig, renderer: Optional[BaseRenderer] = None):
+
+        if renderer is None:
+            logger.warning(
+                "You are using a version of vLLM <= v0.16.0 that relies on the old IO Processor plugin interface. "
+                "Support for vLLM <= v0.16.0 will be removed in TerraTorch v1.6.0."
+            )
+            super().__init__(vllm_config)
+        else:
+            super().__init__(vllm_config, renderer)
 
         self.model_config = vllm_config.model_config.hf_config.to_dict()["pretrained_cfg"]
 
@@ -114,14 +133,21 @@ class TerramindSegmentationIOProcessor(IOProcessor):
         await asyncio.gather(*download_tasks)
 
     def parse_request(self, request: Any) -> IOProcessorInput:
-        if type(request) is dict:
-            image_prompt = RequestData(**request)
+        logger.warning(
+            "You are using a version of vLLM <= v0.16 that relies on the old IO Processor plugin interface. "
+            "Support for vLLM <= v0.16 will be removed in TerraTorch v1.6.0."
+        )
+        return self.parse_data(request)
+
+    def parse_data(self, data: Any) -> IOProcessorInput:
+        if type(data) is dict:
+            image_prompt = RequestData(**data)
             return image_prompt
-        if isinstance(request, IOProcessorRequest):
-            if not hasattr(request, "data"):
+        if isinstance(data, IOProcessorRequest):
+            if not hasattr(data, "data"):
                 raise ValueError("missing 'data' field in OpenAIBaseModel Request")
 
-            request_data = request.data
+            request_data = data.data
 
             if type(request_data) is dict:
                 return RequestData(**request_data)

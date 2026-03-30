@@ -22,7 +22,7 @@ Welcome to TerraTorch! If you are interested in contributing to the [TerraTorch 
 then checkout the [Contribution Process](contribution_process.md) and 
 the [Code of Conduct](CODE_OF_CONDUCT.md)). 
 
-The [erraTorch code repo]([https://github.com/IBM/terratorch/blob/main/README.md)) contains information on how the community
+The [TerraTorch code repo](https://github.com/IBM/terratorch/blob/main/README.md) contains information on how the community
 is organized and other information that is pertinent to contributing.
 
 ### Getting Started

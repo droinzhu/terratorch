@@ -7,7 +7,7 @@ include = ["terratorch*"]
 
 [project]
 name = "terratorch"
-version = "v1.2.4"
+version = "v1.2.6"
 description = "TerraTorch - The geospatial foundation model fine-tuning toolkit"
 license = { "text" = "Apache License, Version 2.0" }
 readme = "README.md"
@@ -29,7 +29,9 @@ authors = [
   { name = "Raunak Bhansali"},
   { name = "Takao Moriyama"},
   { name = "Þorsteinn Elí Gíslason"},
-  { name = "Isabelle Wittmann"}
+  { name = "Isabelle Wittmann"},
+  { name = "Christian Pinto"},
+  { name = "Rosie Lickorish"}
 ]
 classifiers = [
 #  "Development Status :: 2 - Pre-Alpha",
@@ -63,7 +65,6 @@ dependencies = [
   "tifffile",
   "python-box",
   "tqdm",
-  "wandb>=0.18.0",
   "tacoreader==0.5.6",
   "tensorboard",
   "diffusers",
@@ -80,6 +81,10 @@ terratorch_segmentation = "terratorch.vllm.plugins.segmentation:register_segment
 terratorch_tm_segmentation = "terratorch.vllm.plugins.segmentation:register_terramind_segmentation_plugin"
 
 [project.optional-dependencies]
+logging = [
+  "wandb>=0.18.0",
+]
+
 dev = [
   "black",
   "mkdocs-material",
