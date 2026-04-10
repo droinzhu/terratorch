@@ -86,7 +86,6 @@ logging = [
 ]
 
 dev = [
-  "black",
   "mkdocs-material",
   "mkdocstrings[python]",
   "mike", # for building docs with versions
@@ -169,11 +168,6 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 norecursedirs = [".venv", "build", "dist", "site-packages"]
-
-[tool.black]
-target-version = ["py310"]
-line-length = 120
-skip-string-normalization = true
 
 [tool.ruff]
 target-version = "py310"
