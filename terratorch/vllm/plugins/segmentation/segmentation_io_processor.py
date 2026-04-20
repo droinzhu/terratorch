@@ -24,7 +24,7 @@ import torch
 from einops import rearrange
 from vllm.config import VllmConfig
 from vllm.entrypoints.pooling.pooling.protocol import IOProcessorRequest, IOProcessorResponse
-from vllm.inputs.data import PromptType
+from vllm.inputs import PromptType
 from vllm.outputs import PoolingRequestOutput
 from vllm.plugins.io_processors.interface import IOProcessor, IOProcessorInput, IOProcessorOutput
 
