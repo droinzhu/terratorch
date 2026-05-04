@@ -50,6 +50,7 @@ from terratorch.datamodules.landslide4sense import Landslide4SenseNonGeoDataModu
 from terratorch.datamodules.openearthmap import OpenEarthMapNonGeoDataModule
 from terratorch.datamodules.sen1floods11 import Sen1Floods11NonGeoDataModule
 from terratorch.datamodules.sen4agrinet import Sen4AgriNetDataModule
+from terratorch.datamodules.tiled_datamodule_wrapper import TilingDataModuleWrapper
 from terratorch.datamodules.torchgeo_data_module import TorchGeoDataModule, TorchNonGeoDataModule
 
 try:
@@ -92,6 +93,7 @@ __all__ = [
     "MultiTemporalCropClassificationDataModule",
     "TorchGeoDataModule",
     "TorchNonGeoDataModule",
+    "TilingDataModuleWrapper",
     "MEuroSATNonGeoDataModule",
     "MBigEarthNonGeoDataModule",
     "MBrickKilnNonGeoDataModule",

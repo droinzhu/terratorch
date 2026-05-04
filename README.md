@@ -110,6 +110,7 @@ To get started, check out the [quick start guide](https://terrastackai.github.io
 
 Developers, check out the [architecture overview](https://terrastackai.github.io/terratorch/architecture).
 
+
 [TerraTorch: The Geospatial Foundation Models Toolkit on arXiv](https://arxiv.org/abs/2503.20563)
 ## Contributing
 

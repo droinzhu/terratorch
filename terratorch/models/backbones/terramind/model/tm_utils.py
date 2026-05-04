@@ -568,6 +568,7 @@ def interpolate_pos_encoding(pos_embeddings: torch.Tensor, height, width, patch_
         align_corners=False,
     )
 
-    pos_embeddings = pos_embeddings.permute(0, 2, 3, 1).view(1, -1, dim_tokens)
+    # `permute` may return a non-contiguous tensor, so use reshape instead of view.
+    pos_embeddings = pos_embeddings.permute(0, 2, 3, 1).reshape(1, -1, dim_tokens)
 
     return pos_embeddings

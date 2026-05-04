@@ -168,7 +168,7 @@ def _interpolate_pos_encoding(
         mode="bicubic",
         align_corners=True,
     )
-    patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, embed_dim)
+    patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).reshape(1, -1, embed_dim)
 
     return torch.cat((class_pos_embed, patch_pos_embed), dim=1)
 
