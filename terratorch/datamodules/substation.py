@@ -1,4 +1,3 @@
-import pdb
 from collections.abc import Callable
 from functools import partial
 from typing import Any, ClassVar
@@ -55,7 +54,6 @@ def get_transform(train, image_size=228, n_timesteps=4):
 
 def apply_transforms(sample, transforms):
 
-    # pdb.set_trace()
     sample["image"] = torch.stack(tuple(sample["image"]))
     sample["image"] = (
         sample["image"].permute(1, 2, 0) if len(sample["image"].shape) == 3 else sample["image"].permute(0, 2, 3, 1)
@@ -100,7 +98,6 @@ class Normalize(Callable):
             msg = f"Expected batch to have 5 or 4 dimensions, but got {len(image.shape)}"
             raise Exception(msg)
         batch["image"] = (image - means) / stds
-        # pdb.set_trace()
         return batch
 
 

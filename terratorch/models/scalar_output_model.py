@@ -1,7 +1,5 @@
 # Copyright contributors to the Terratorch project
 
-import pdb
-
 import torch
 from segmentation_models_pytorch.base import SegmentationModel
 from torch import nn

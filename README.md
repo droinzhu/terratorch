@@ -17,7 +17,7 @@
 
 [![huggingface](https://img.shields.io/badge/Hugging_Face-join-FFD21E?logo=huggingface)](https://huggingface.co/ibm-nasa-geospatial)
 [![pypi](https://badge.fury.io/py/terratorch.svg)](https://pypi.org/project/terratorch)
-[![tests](https://github.com/terrastackai/terratorch/actions/workflows/test.yaml/badge.svg)](https://github.com/terrastackai/terratorch/actions/workflows/test.yaml)
+[![tests](https://github.com/terrastackai/terratorch/actions/workflows/tests.yaml/badge.svg)](https://github.com/terrastackai/terratorch/actions/workflows/tests.yaml)
 [![MkDocs](https://img.shields.io/badge/MkDocs-526CFE?logo=materialformkdocs&logoColor=fff)](https://terrastackai.github.io/terratorch/)
 <!--
 ![cov](https://github.com/terrastackai/terratorch/raw/main/assets/coverage-badge.svg)

@@ -6,7 +6,6 @@
 
 """Trainers for object detection."""
 
-import pdb
 import warnings
 from typing import Any
 
@@ -349,7 +348,6 @@ class ObjectDetectionTask(BaseTask):
                 pass
 
             if fig:
-                # pdb.set_trace()
                 summary_writer = self.logger.experiment
                 if hasattr(self.logger.experiment, "add_figure"):
                     summary_writer.add_figure(f"image/{batch_idx}", fig, global_step=self.global_step)

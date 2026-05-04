@@ -1,7 +1,6 @@
 # reference torchgeo https://torchgeo.readthedocs.io/en/stable/_modules/torchgeo/models/resnet.html
 
 import logging
-import pdb
 from collections.abc import Callable
 from functools import partial
 from typing import List

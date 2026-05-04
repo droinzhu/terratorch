@@ -1,4 +1,3 @@
-import pdb
 from collections.abc import Callable
 from functools import partial
 from typing import Any, ClassVar
@@ -97,7 +96,6 @@ class Normalize(Callable):
             msg = f"Expected batch to have 5 or 4 dimensions, but got {len(image.shape)}"
             raise Exception(msg)
         batch["image"] = (image - means) / stds
-        # pdb.set_trace()
         return batch
 
 

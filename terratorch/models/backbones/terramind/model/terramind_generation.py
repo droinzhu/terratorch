@@ -125,7 +125,8 @@ class TerraMindGeneration(nn.Module):
 
         # Init embeddings
         self.encoder_embeddings, mod_name_mapping = build_modality_embeddings(
-            MODALITY_INFO, modalities, img_size=img_size, dim=dim, patch_size=patch_size
+            MODALITY_INFO, modalities, cond_modalities=output_modalities[:-1], img_size=img_size, dim=dim,
+            patch_size=patch_size
         )
         self.decoder_embeddings, decoder_name_mapping = build_output_modality_embeddings(
             MODALITY_INFO, output_modalities, img_size=img_size, dim=dim, patch_size=patch_size

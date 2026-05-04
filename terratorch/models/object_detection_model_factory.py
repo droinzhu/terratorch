@@ -1,6 +1,5 @@
 # Copyright contributors to the Terratorch project
 
-import pdb
 from dataclasses import dataclass
 from functools import partial
 
@@ -92,7 +91,6 @@ class ObjectDetectionModelFactory(ModelFactory):
         except AttributeError as e:
             msg = "backbone must have out_channels attribute"
             raise AttributeError(msg) from e
-        # pdb.set_trace()
         if necks is None:
             necks = []
         neck_list, channel_list = build_neck_list(necks, out_channels)
@@ -100,7 +98,6 @@ class ObjectDetectionModelFactory(ModelFactory):
         neck_module = NeckSequential(*neck_list)
 
         combined_backbone = BackboneWrapper(backbone, neck_module, channel_list)
-        # pdb.set_trace()
 
         if framework == "faster-rcnn":
             sizes = ((32), (64), (128), (256), (512))
