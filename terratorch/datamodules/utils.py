@@ -204,7 +204,7 @@ class Normalize(Callable):
         self.stds = torch.tensor(stds) if not isinstance(stds, torch.Tensor) else stds.clone()
         self.denormalize = denormalize
 
-    def __call__(self, batch):
+    def __call__(self, batch, denormalize: bool = False):
         """
         Apply normalization to batch images.
 
@@ -252,7 +252,7 @@ class Normalize(Callable):
             raise ValueError(msg)
 
         # Apply normalization or denormalization
-        if self.denormalize:
+        if self.denormalize or denormalize:
             batch["image"] = image * stds + means
         else:
             batch["image"] = (image - means) / stds
