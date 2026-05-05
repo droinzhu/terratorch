@@ -1,0 +1,142 @@
+# =============================================================================
+# BiCross-EO (Prithvi+DOFA) on DFC2020 Land Cover Segmentation
+# Task: 8-class land cover (Forest/Shrub/Grassland/Wetland/Crop/Urban/Barren/Water)
+# =============================================================================
+seed_everything: 42
+
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 16-mixed
+  logger:
+    class_path: TensorBoardLogger
+    init_args:
+      save_dir: /home/clara/trans/tensorboard/bicross_eo_dfc2020
+      name: bicross_eo_dfc2020
+      version: v2
+  callbacks:
+    - class_path: RichProgressBar
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val/loss
+        patience: 20
+
+  max_epochs: 100
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 10
+  enable_checkpointing: false
+  default_root_dir: /home/clara/trans/checkpoint/bicross_eo_dfc2020
+
+data:
+  class_path: terratorch.datamodules.DFC2020DataModule
+  init_args:
+    data_root: /home/clara/trans/dfc2020/DFC2020
+    batch_size: 4
+    num_workers: 4
+    image_size: 224
+    max_train_samples: 5000
+    max_val_samples: 500
+
+model:
+  class_path: terratorch.tasks.SemanticSegmentationTask
+  init_args:
+    model_factory: PrithviDofaModelFactory
+    model_args:
+      num_classes: 8
+
+      optical_backbone: prithvi_eo_v2_300
+      optical_out_indices: [5, 11, 17, 23]
+      optical_backbone_kwargs:
+        pretrained: true
+        encoder_only: true
+        num_frames: 1
+        bands:
+          - COASTAL_AEROSOL
+          - BLUE
+          - GREEN
+          - RED
+          - RED_EDGE_1
+          - RED_EDGE_2
+          - RED_EDGE_3
+          - NIR_BROAD
+          - NIR_NARROW
+          - WATER_VAPOR
+          - CIRRUS
+          - SWIR_1
+          - SWIR_2
+
+      optical_peft_config:
+        method: LORA
+        replace_qkv: qkv
+        peft_config_kwargs:
+          r: 32
+          lora_alpha: 64
+          target_modules:
+            - qkv.q_linear
+            - qkv.v_linear
+            - mlp.fc1
+            - mlp.fc2
+          bias: none
+
+      sar_backbone: dofa_large_patch16_224
+      sar_out_indices: [5, 11, 17, 23]
+      sar_backbone_kwargs:
+        pretrained: true
+        model_bands:
+          - VV
+          - VH
+
+      sar_peft_config:
+        method: LORA
+        peft_config_kwargs:
+          r: 16
+          lora_alpha: 32
+          target_modules:
+            - attn.qkv
+            - mlp.fc1
+            - mlp.fc2
+          bias: none
+
+      embed_dim: 1024
+      fusion_heads: 8
+      fusion_dropout: 0.1
+
+      decoder_channels: [512, 256, 128, 64]
+      skip_dim: 256
+      num_skip_levels: 3
+      use_dofa_skips: true
+
+      image_size: 224
+      freeze_encoders: false
+      s2_modality_key: S2
+      s1_modality_key: S1
+
+    loss: dice
+    ignore_index: -1
+    freeze_backbone: false
+    freeze_decoder: false
+    plot_on_val: 0
+
+    lr_overrides:
+      fusion: 6.0e-4
+      skip_projs: 6.0e-4
+      decoder_blocks: 6.0e-4
+      seg_head: 6.0e-4
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 6.0e-5
+    weight_decay: 0.05
+
+lr_scheduler:
+  class_path: ReduceLROnPlateau
+  init_args:
+    monitor: val/loss
+    patience: 6
+    factor: 0.5

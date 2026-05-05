@@ -1,0 +1,192 @@
+# lightning.pytorch==2.1.1
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 16-mixed
+  logger:
+    class_path: TensorBoardLogger
+    init_args:
+      save_dir: /home/clara/trans/tensorboard/multimodal_prithvi
+      name: multimodal_prithvi_sen1floods11
+      version: v1
+  callbacks:
+    - class_path: RichProgressBar
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val/loss
+        patience: 40
+
+  max_epochs: 100
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 50
+  enable_checkpointing: True
+  default_root_dir: /home/clara/trans/checkpoint/multimodal_prithvi
+
+data:
+  class_path: terratorch.datamodules.GenericMultiModalDataModule
+  init_args:
+    task: 'segmentation'
+    batch_size: 2
+    num_workers: 4
+    modalities:
+      - S2
+      - S1
+    rgb_indices:
+      S2:
+        - 3
+        - 2
+        - 1
+
+    train_data_root:
+      S2: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S2Hand
+      S1: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S1Hand
+    train_label_data_root: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/LabelHand
+    val_data_root:
+      S2: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S2Hand
+      S1: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S1Hand
+    val_label_data_root: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/LabelHand
+    test_data_root:
+      S2: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S2Hand
+      S1: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S1Hand
+    test_label_data_root: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/LabelHand
+
+    train_split: /home/clara/trans/sen1floods11/v1.1/splits/flood_handlabeled/flood_train_data.txt
+    val_split: /home/clara/trans/sen1floods11/v1.1/splits/flood_handlabeled/flood_valid_data.txt
+    test_split: /home/clara/trans/sen1floods11/v1.1/splits/flood_handlabeled/flood_test_data.txt
+
+    allow_substring_file_names: True
+    image_grep:
+      S2: "*_S2Hand.tif"
+      S1: "*_S1Hand.tif"
+    label_grep: "*_LabelHand.tif"
+    no_label_replace: -1
+    no_data_replace: 0
+    concat_bands: true
+
+    # S2Hand has 13 bands; select 12 to match backbone_bands (drop WATER_VAPOR band 10)
+    dataset_bands:
+      S2:
+        - COASTAL_AEROSOL
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - RED_EDGE_2
+        - RED_EDGE_3
+        - NIR_BROAD
+        - NIR_NARROW
+        - WATER_VAPOR
+        - CIRRUS
+        - SWIR_1
+        - SWIR_2
+    output_bands:
+      S2:
+        - COASTAL_AEROSOL
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - RED_EDGE_2
+        - RED_EDGE_3
+        - NIR_BROAD
+        - NIR_NARROW
+        - CIRRUS
+        - SWIR_1
+        - SWIR_2
+
+    means:
+      S2:
+        - 1793.243
+        - 1924.863
+        - 2184.553
+        - 2340.936
+        - 2671.402
+        - 3240.082
+        - 3468.412
+        - 3563.244
+        - 3627.704
+        - 3711.071
+        - 3416.714
+        - 2849.625
+      S1:
+        - -12.577
+        - -20.265
+
+    stds:
+      S2:
+        - 1160.144
+        - 1201.092
+        - 1219.943
+        - 1397.225
+        - 1400.035
+        - 1373.136
+        - 1429.17
+        - 1485.025
+        - 1447.836
+        - 1652.703
+        - 1471.002
+        - 1365.30
+      S1:
+        - 5.179
+        - 5.872
+
+    num_classes: 2
+
+    train_transform:
+      - class_path: albumentations.RandomCrop
+        init_args:
+          height: 224
+          width: 224
+      - class_path: albumentations.D4
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+
+
+model:
+  class_path: terratorch.tasks.SemanticSegmentationTask
+  init_args:
+    model_factory: EncoderDecoderFactory
+    model_args:
+      backbone: prithvi_eo_v2_300
+      backbone_pretrained: false
+      backbone_bands:
+        - COASTAL_AEROSOL
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - RED_EDGE_2
+        - RED_EDGE_3
+        - NIR_BROAD
+        - NIR_NARROW
+        - CIRRUS
+        - SWIR_1
+        - SWIR_2
+        - VV
+        - VH
+      decoder: FCNDecoder
+      decoder_num_convs: 4
+      decoder_channels: 256
+      num_classes: 2
+      head_dropout: 0.1
+      head_channel_list:
+        - 256
+    loss: dice
+    ignore_index: -1
+    freeze_backbone: true
+    freeze_decoder: false
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 6.e-5
+    weight_decay: 0.05
+lr_scheduler:
+  class_path: ReduceLROnPlateau
+  init_args:
+    monitor: val/loss

@@ -128,7 +128,8 @@ class DOFAEncoderWrapper(nn.Module):
         self.weights = weights
         self.wavelengths = wavelengths
 
-        self.out_indices = out_indices if out_indices else [-1]
+        # Default to all blocks (like Prithvi) so SelectIndices([5,11,17,23]) works
+        self.out_indices = out_indices if out_indices is not None else list(range(len(self.dofa_model.blocks)))
         self.out_channels = [self.dofa_model.patch_embed.embed_dim] * len(self.out_indices)
 
     def forward(self, x: list[torch.Tensor], **kwargs) -> torch.Tensor:
@@ -153,7 +154,7 @@ class DOFAEncoderWrapper(nn.Module):
         return tuple(outs)
 
 
-def get_wavelenghts(model_bands: list[str]) -> list[float]:
+def get_wavelenghts(model_bands: list[str] | None) -> list[float]:
     """Extract wavelength values for given spectral bands.
 
     Args:
@@ -162,13 +163,15 @@ def get_wavelenghts(model_bands: list[str]) -> list[float]:
     Returns:
         List of corresponding wavelength values in micrometers
     """
+    if model_bands is None:
+        raise ValueError("model_bands must be provided for DOFA backbone (e.g. backbone_model_bands in YAML)")
     wavelengths = [waves_list[x.split(".")[-1]] for x in model_bands]
     return wavelengths
 
 
 @TERRATORCH_BACKBONE_REGISTRY.register
 def dofa_small_patch16_224(
-    model_bands,
+    model_bands: list[str] | None = None,
     input_size=224,
     pretrained=False,
     ckpt_data: str | None = None,
@@ -188,7 +191,7 @@ def dofa_small_patch16_224(
 
 @TERRATORCH_BACKBONE_REGISTRY.register
 def dofa_base_patch16_224(
-    model_bands,
+    model_bands: list[str] | None = None,
     pretrained=False,
     ckpt_data: str | None = None,
     weights: Weights | None = dofa.DOFABase16_Weights.DOFA_MAE,
@@ -207,7 +210,7 @@ def dofa_base_patch16_224(
 
 @TERRATORCH_BACKBONE_REGISTRY.register
 def dofa_large_patch16_224(
-    model_bands,
+    model_bands: list[str] | None = None,
     pretrained=False,
     ckpt_data: str | None = None,
     weights: Weights | None = dofa.DOFALarge16_Weights.DOFA_MAE,
@@ -221,6 +224,32 @@ def dofa_large_patch16_224(
         model = load_dofa_weights(model, pos_interpolation_mode, ckpt_data, weights, input_size)
     wavelengths = get_wavelenghts(model_bands)
 
+    return DOFAEncoderWrapper(model, wavelengths, weights, out_indices)
+
+
+@TERRATORCH_BACKBONE_REGISTRY.register
+def dofa_large_patch16_224_s2s1(
+    pretrained=False,
+    ckpt_data: str | None = None,
+    weights: Weights | None = dofa.DOFALarge16_Weights.DOFA_MAE,
+    out_indices: list | None = None,
+    pos_interpolation_mode: str = "bilinear",
+    **kwargs,
+):
+    """DOFA-Large with 15 hardcoded bands: 13 S2 (optical) + VV + VH (SAR).
+    Bypasses HLSBands enum validation — bands are specified by wavelength directly."""
+    _bands_s2s1 = [
+        "COASTAL_AEROSOL", "BLUE", "GREEN", "RED",
+        "RED_EDGE_1", "RED_EDGE_2", "RED_EDGE_3",
+        "NIR_BROAD", "NIR_NARROW", "WATER_VAPOR", "CIRRUS",
+        "SWIR_1", "SWIR_2",
+        "VV", "VH",
+    ]
+    model = dofa.dofa_large_patch16_224(**kwargs)
+    input_size = kwargs.get("img_size", 224)
+    if pretrained:
+        model = load_dofa_weights(model, pos_interpolation_mode, ckpt_data, weights, input_size)
+    wavelengths = get_wavelenghts(_bands_s2s1)
     return DOFAEncoderWrapper(model, wavelengths, weights, out_indices)
 
 

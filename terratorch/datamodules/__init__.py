@@ -43,6 +43,7 @@ from terratorch.datamodules.biomassters import BioMasstersNonGeoDataModule
 from terratorch.datamodules.burn_intensity import BurnIntensityNonGeoDataModule
 from terratorch.datamodules.carbonflux import CarbonFluxNonGeoDataModule
 from terratorch.datamodules.forestnet import ForestNetNonGeoDataModule
+from terratorch.datamodules.dfc2020_datamodule import DFC2020DataModule
 from terratorch.datamodules.generic_multimodal_data_module import GenericMultiModalDataModule
 from terratorch.datamodules.landslide4sense import Landslide4SenseNonGeoDataModule
 
@@ -77,6 +78,7 @@ except ImportError:
     pass
 
 __all__ = [
+    "DFC2020DataModule",
     "GenericNonGeoSegmentationDataModule",
     "GenericNonGeoPixelwiseRegressionDataModule",
     "GenericNonGeoClassificationDataModule",

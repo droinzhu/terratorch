@@ -16,6 +16,7 @@ from terratorch.models.prithvi_model_factory import PrithviModelFactory
 from terratorch.models.satmae_model_factory import SatMAEModelFactory
 from terratorch.models.smp_model_factory import SMPModelFactory
 from terratorch.models.timm_model_factory import TimmModelFactory
+from terratorch.models.prithvi_dofa_model_factory import PrithviDofaModelFactory
 
 try:
     granitewcx = True
@@ -37,6 +38,7 @@ __all__ = (
     "SatMAEModelFactory",
     "TimmModelFactory",
     "WxCModelFactory",
+    "PrithviDofaModelFactory",
 )
 
 if granitewcx:

@@ -1,0 +1,96 @@
+# =============================================================================
+# Prithvi-EO-2.0-300M (S2 optical only) on DFC2020 — single-modal baseline
+# =============================================================================
+seed_everything: 42
+
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 16-mixed
+  logger:
+    class_path: TensorBoardLogger
+    init_args:
+      save_dir: /home/clara/trans/tensorboard/prithvi_dfc2020
+      name: prithvi_dfc2020
+      version: v1
+  callbacks:
+    - class_path: RichProgressBar
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val/loss
+        patience: 20
+  max_epochs: 100
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 10
+  enable_checkpointing: false
+  default_root_dir: /home/clara/trans/checkpoint/prithvi_dfc2020
+
+data:
+  class_path: terratorch.datamodules.DFC2020DataModule
+  init_args:
+    data_root: /home/clara/trans/dfc2020/DFC2020
+    batch_size: 4
+    num_workers: 4
+    image_size: 224
+    max_train_samples: 5000
+    max_val_samples: 500
+    single_modality: S2   # Prithvi S2-only baseline
+
+model:
+  class_path: terratorch.tasks.SemanticSegmentationTask
+  init_args:
+    model_factory: EncoderDecoderFactory
+    model_args:
+      backbone: prithvi_eo_v2_300
+      backbone_pretrained: true
+      backbone_num_frames: 1
+      backbone_bands:
+        - COASTAL_AEROSOL
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - RED_EDGE_2
+        - RED_EDGE_3
+        - NIR_BROAD
+        - NIR_NARROW
+        - WATER_VAPOR
+        - CIRRUS
+        - SWIR_1
+        - SWIR_2
+
+      necks:
+        - name: SelectIndices
+          indices: [5, 11, 17, 23]
+        - name: ReshapeTokensToImage
+          remove_cls_token: true
+        - name: LearnedInterpolateToPyramidal
+
+      decoder: UNetDecoder
+      decoder_channels: [512, 256, 128, 64]
+      head_dropout: 0.1
+      num_classes: 8
+
+    loss: dice
+    ignore_index: -1
+    plot_on_val: 0
+    freeze_backbone: false
+    freeze_decoder: false
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 6.0e-5
+    weight_decay: 0.05
+
+lr_scheduler:
+  class_path: ReduceLROnPlateau
+  init_args:
+    monitor: val/loss
+    patience: 6
+    factor: 0.5

@@ -1,0 +1,305 @@
+# =============================================================================
+# Prithvi (S2 光学) + DOFA (S1 SAR) 双向跨模态融合  v2
+# 任务: Sen1Floods11 洪水分割
+# 改进: WATER_VAPOR 波段还原、双向融合、联合skip、分组学习率、LoRA rank提升
+# =============================================================================
+seed_everything: 42
+
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 16-mixed
+  logger:
+    class_path: TensorBoardLogger
+    init_args:
+      save_dir: /home/clara/trans/tensorboard/prithvi_dofa_fusion
+      name: prithvi_dofa_sen1floods11
+      version: v3
+  callbacks:
+    - class_path: RichProgressBar
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val/loss
+        patience: 20
+    - class_path: ModelCheckpoint
+      init_args:
+        monitor: val/mIoU
+        mode: max
+        save_top_k: 1
+        filename: best-{epoch:02d}-{val/mIoU:.4f}
+
+  max_epochs: 200
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 10
+  enable_checkpointing: true
+  default_root_dir: /home/clara/trans/checkpoint/prithvi_dofa_fusion
+
+# =============================================================================
+# 数据: GenericMultiModalDataModule  concat_bands=false → dict 输入
+#   batch["image"] = {"S2": Tensor[B,13,H,W], "S1": Tensor[B,2,H,W]}
+# =============================================================================
+data:
+  class_path: terratorch.datamodules.GenericMultiModalDataModule
+  init_args:
+    task: segmentation
+    batch_size: 4
+    num_workers: 4
+    modalities:
+      - S2
+      - S1
+    rgb_modality: S2
+    rgb_indices:
+      - 2   # RED
+      - 1   # GREEN
+      - 0   # BLUE
+
+    train_data_root:
+      S2: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S2Hand
+      S1: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S1Hand
+    train_label_data_root: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/LabelHand
+
+    val_data_root:
+      S2: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S2Hand
+      S1: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S1Hand
+    val_label_data_root: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/LabelHand
+
+    test_data_root:
+      S2: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S2Hand
+      S1: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/S1Hand
+    test_label_data_root: /home/clara/trans/sen1floods11/v1.1/data/flood_events/HandLabeled/LabelHand
+
+    train_split: /home/clara/trans/sen1floods11/v1.1/splits/flood_handlabeled/flood_train_data.txt
+    val_split: /home/clara/trans/sen1floods11/v1.1/splits/flood_handlabeled/flood_valid_data.txt
+    test_split: /home/clara/trans/sen1floods11/v1.1/splits/flood_handlabeled/flood_test_data.txt
+
+    allow_substring_file_names: true
+    image_grep:
+      S2: "*_S2Hand.tif"
+      S1: "*_S1Hand.tif"
+    label_grep: "*_LabelHand.tif"
+
+    concat_bands: false
+    no_label_replace: -1
+    no_data_replace: 0
+
+    # S2: 全部 13 波段 (含 WATER_VAPOR，与 Prithvi 预训练对齐)
+    dataset_bands:
+      S2:
+        - COASTAL_AEROSOL
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - RED_EDGE_2
+        - RED_EDGE_3
+        - NIR_BROAD
+        - NIR_NARROW
+        - WATER_VAPOR
+        - CIRRUS
+        - SWIR_1
+        - SWIR_2
+      S1:
+        - VV
+        - VH
+
+    output_bands:
+      S2:
+        - COASTAL_AEROSOL
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - RED_EDGE_2
+        - RED_EDGE_3
+        - NIR_BROAD
+        - NIR_NARROW
+        - WATER_VAPOR   # ← v2 新增，与 Prithvi 预训练权重完整对齐
+        - CIRRUS
+        - SWIR_1
+        - SWIR_2
+      S1:
+        - VV
+        - VH
+
+    means:
+      S2:
+        - 1793.243   # COASTAL_AEROSOL
+        - 1924.863   # BLUE
+        - 2184.553   # GREEN
+        - 2340.936   # RED
+        - 2671.402   # RED_EDGE_1
+        - 3240.082   # RED_EDGE_2
+        - 3468.412   # RED_EDGE_3
+        - 3563.244   # NIR_BROAD
+        - 3627.704   # NIR_NARROW
+        - 1378.0     # WATER_VAPOR (B09)
+        - 3711.071   # CIRRUS
+        - 3416.714   # SWIR_1
+        - 2849.625   # SWIR_2
+      S1:
+        - -12.577
+        - -20.265
+
+    stds:
+      S2:
+        - 1160.144   # COASTAL_AEROSOL
+        - 1201.092   # BLUE
+        - 1219.943   # GREEN
+        - 1397.225   # RED
+        - 1400.035   # RED_EDGE_1
+        - 1373.136   # RED_EDGE_2
+        - 1429.17    # RED_EDGE_3
+        - 1485.025   # NIR_BROAD
+        - 1447.836   # NIR_NARROW
+        - 406.0      # WATER_VAPOR (B09)
+        - 1652.703   # CIRRUS
+        - 1471.002   # SWIR_1
+        - 1365.30    # SWIR_2
+      S1:
+        - 5.179
+        - 5.872
+
+    num_classes: 2
+
+    train_transform:
+      - class_path: albumentations.RandomCrop
+        init_args:
+          height: 224
+          width: 224
+      - class_path: albumentations.D4
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+
+    val_transform:
+      - class_path: albumentations.CenterCrop
+        init_args:
+          height: 224
+          width: 224
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+
+    test_transform:
+      - class_path: albumentations.CenterCrop
+        init_args:
+          height: 224
+          width: 224
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+
+# =============================================================================
+# 模型: PrithviDofaModelFactory v2
+# =============================================================================
+model:
+  class_path: terratorch.tasks.SemanticSegmentationTask
+  init_args:
+    model_factory: PrithviDofaModelFactory
+    model_args:
+      num_classes: 2
+
+      # ── 光学编码器: Prithvi-EO-2.0-300M ──────────────────────────
+      optical_backbone: prithvi_eo_v2_300
+      optical_out_indices: [5, 11, 17, 23]
+      optical_backbone_kwargs:
+        pretrained: true
+        encoder_only: true
+        num_frames: 1
+        bands:
+          - COASTAL_AEROSOL
+          - BLUE
+          - GREEN
+          - RED
+          - RED_EDGE_1
+          - RED_EDGE_2
+          - RED_EDGE_3
+          - NIR_BROAD
+          - NIR_NARROW
+          - WATER_VAPOR   # ← 与预训练对齐
+          - CIRRUS
+          - SWIR_1
+          - SWIR_2
+
+      # ── 光学编码器 LoRA (rank 提升到 32) ─────────────────────────
+      optical_peft_config:
+        method: LORA
+        replace_qkv: qkv
+        peft_config_kwargs:
+          r: 32
+          lora_alpha: 64
+          target_modules:
+            - qkv.q_linear
+            - qkv.v_linear
+            - mlp.fc1
+            - mlp.fc2
+          bias: none
+
+      # ── SAR 编码器: DOFA-Large，多尺度输出 ───────────────────────
+      sar_backbone: dofa_large_patch16_224
+      sar_out_indices: [5, 11, 17, 23]   # v2: 多尺度特征用于 skip
+      sar_backbone_kwargs:
+        pretrained: true
+        model_bands:
+          - VV
+          - VH
+
+      # ── SAR 编码器 LoRA (rank 提升到 16) ─────────────────────────
+      sar_peft_config:
+        method: LORA
+        peft_config_kwargs:
+          r: 16
+          lora_alpha: 32
+          target_modules:
+            - attn.qkv
+            - mlp.fc1
+            - mlp.fc2
+          bias: none
+
+      # ── 双向跨模态注意力融合 ─────────────────────────────────────
+      embed_dim: 1024
+      fusion_heads: 8
+      fusion_dropout: 0.1
+
+      # ── UNet 解码器 ──────────────────────────────────────────────
+      decoder_channels: [512, 256, 128, 64]
+      skip_dim: 256
+      num_skip_levels: 3
+      use_dofa_skips: true   # v2: SAR+光学联合 skip connection
+
+      # ── 其他 ─────────────────────────────────────────────────────
+      image_size: 224
+      freeze_encoders: false
+      s2_modality_key: S2
+      s1_modality_key: S1
+
+    loss: dice
+    ignore_index: -1
+    freeze_backbone: false
+    freeze_decoder: false
+
+    # ── 分组学习率: 融合/解码器用 10× 学习率 ──────────────────────
+    lr_overrides:
+      fusion: 6.0e-4
+      skip_projs: 6.0e-4
+      decoder_blocks: 6.0e-4
+      seg_head: 6.0e-4
+
+    tiled_inference_parameters:
+      h_crop: 224
+      h_stride: 196
+      w_crop: 224
+      w_stride: 196
+      average_patches: true
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 6.0e-5
+    weight_decay: 0.05
+
+lr_scheduler:
+  class_path: ReduceLROnPlateau
+  init_args:
+    monitor: val/loss
+    patience: 6
+    factor: 0.5
