@@ -136,7 +136,18 @@ class DOFAEncoderWrapper(nn.Module):
         wavelist = torch.tensor(self.wavelengths, device=x.device).float()
 
         x, _ = self.dofa_model.patch_embed(x, wavelist)
-        x = x + self.dofa_model.pos_embed[:, 1:, :]
+
+        # Interpolate positional embedding if spatial size doesn't match
+        pos_embed = self.dofa_model.pos_embed[:, 1:, :]  # (1, N_pretrain, D)
+        N_pretrain = pos_embed.shape[1]
+        N_actual = x.shape[1]
+        if N_actual != N_pretrain:
+            H_p = W_p = int(N_pretrain ** 0.5)
+            H_a = W_a = int(N_actual ** 0.5)
+            pos_embed = pos_embed.reshape(1, H_p, W_p, -1).permute(0, 3, 1, 2)
+            pos_embed = F.interpolate(pos_embed, size=(H_a, W_a), mode="bicubic", align_corners=False)
+            pos_embed = pos_embed.permute(0, 2, 3, 1).reshape(1, N_actual, -1)
+        x = x + pos_embed
         # append cls token
         cls_token = self.dofa_model.cls_token + self.dofa_model.pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)

@@ -45,6 +45,7 @@ from terratorch.datamodules.carbonflux import CarbonFluxNonGeoDataModule
 from terratorch.datamodules.forestnet import ForestNetNonGeoDataModule
 from terratorch.datamodules.dfc2020_datamodule import DFC2020DataModule
 from terratorch.datamodules.generic_multimodal_data_module import GenericMultiModalDataModule
+from terratorch.datamodules.pastis_r_datamodule import PASTISRDataModule, PASTISRDataset
 from terratorch.datamodules.landslide4sense import Landslide4SenseNonGeoDataModule
 
 # miscellaneous datamodules
@@ -109,6 +110,8 @@ __all__ = [
     "OpenEarthMapNonGeoDataModule",
     "OpenSentinelMapDataModule",
     "PASTISDataModule",
+    "PASTISRDataModule",
+    "PASTISRDataset",
     "Sen4AgriNetDataModule",
     "GenericMultiModalDataModule",
     "mVHR10DataModule",
