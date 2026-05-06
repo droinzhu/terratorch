@@ -86,6 +86,7 @@ class PASTISRDataset(Dataset):
         s1_key: str = "S1",
         max_samples: Optional[int] = None,
         single_frame: bool = False,
+        single_modality: Optional[str] = None,
     ):
         """
         Args:
@@ -111,9 +112,10 @@ class PASTISRDataset(Dataset):
         self.use_s1d      = use_s1d
         self.transform    = transform
         self.augment      = augment
-        self.s2_key       = s2_key
-        self.s1_key       = s1_key
-        self.single_frame = single_frame  # True → squeeze T dim, output (C,H,W)
+        self.s2_key          = s2_key
+        self.s1_key          = s1_key
+        self.single_frame    = single_frame    # True → squeeze T dim, output (C,H,W)
+        self.single_modality = single_modality # "S2"/"S1" → return plain tensor instead of dict
 
         # Normalisation arrays: (C,) for broadcasting over (T, C, H, W)
         self._s2_mean = torch.tensor(S2_MEAN, dtype=torch.float32).view(1, NUM_S2_BANDS, 1, 1)
@@ -329,6 +331,12 @@ class PASTISRDataset(Dataset):
                 "s1_dates": s1_dates,
             }
 
+        # Flatten multi-modal dict to a single tensor when requested
+        if self.single_modality == "S2":
+            sample["image"] = sample["image"][self.s2_key]
+        elif self.single_modality == "S1":
+            sample["image"] = sample["image"][self.s1_key]
+
         if self.transform is not None:
             sample = self.transform(sample)
 
@@ -361,6 +369,7 @@ class PASTISRDataModule(pl.LightningDataModule):
         s2_key: str = "S2",
         s1_key: str = "S1",
         single_frame: bool = False,
+        single_modality: Optional[str] = None,
     ):
         """
         Args:
@@ -378,21 +387,25 @@ class PASTISRDataModule(pl.LightningDataModule):
             max_val_samples:    Cap validation set size.
             s2_key:             Dict key for Sentinel-2 tensors.
             s1_key:             Dict key for Sentinel-1 tensors.
+            single_modality:    If "S2" or "S1", return a plain tensor for that
+                                modality instead of a modal dict (needed for
+                                single-backbone models like Prithvi).
         """
         super().__init__()
-        self.data_root        = data_root
-        self.batch_size       = batch_size
-        self.num_workers      = num_workers
-        self.num_s2_frames    = num_s2_frames
-        self.num_s1_frames    = num_s1_frames
-        self.use_s1a          = use_s1a
-        self.use_s1d          = use_s1d
-        self.image_size       = image_size
+        self.data_root         = data_root
+        self.batch_size        = batch_size
+        self.num_workers       = num_workers
+        self.num_s2_frames     = num_s2_frames
+        self.num_s1_frames     = num_s1_frames
+        self.use_s1a           = use_s1a
+        self.use_s1d           = use_s1d
+        self.image_size        = image_size
         self.max_train_samples = max_train_samples
-        self.max_val_samples  = max_val_samples
-        self.s2_key           = s2_key
-        self.s1_key           = s1_key
-        self.single_frame     = single_frame
+        self.max_val_samples   = max_val_samples
+        self.s2_key            = s2_key
+        self.s1_key            = s1_key
+        self.single_frame      = single_frame
+        self.single_modality   = single_modality
 
         self._train_ds: Optional[Union[PASTISRDataset, Subset]] = None
         self._val_ds:   Optional[Union[PASTISRDataset, Subset]] = None
@@ -412,6 +425,7 @@ class PASTISRDataModule(pl.LightningDataModule):
             s2_key=self.s2_key,
             s1_key=self.s1_key,
             single_frame=self.single_frame,
+            single_modality=self.single_modality,
         )
 
         if stage in (None, "fit"):
@@ -480,21 +494,20 @@ class PASTISRDataModule(pl.LightningDataModule):
         Collate a list of sample dicts into batched tensors.
 
         All temporal dimensions are fixed per dataset, so simple stacking works.
+        Handles both multi-modal (image=dict) and single-modality (image=tensor) modes.
         """
-        s2_key = list(batch[0]["image"].keys())[0]
-        s1_key = list(batch[0]["image"].keys())[1]
+        mask_list = [s["mask"] for s in batch]
+        out = {"mask": torch.stack(mask_list, dim=0)}
 
-        s2_list   = [s["image"][s2_key] for s in batch]
-        s1_list   = [s["image"][s1_key] for s in batch]
-        mask_list = [s["mask"]          for s in batch]
+        first_image = batch[0]["image"]
+        if isinstance(first_image, dict):
+            # Multi-modal dict mode
+            keys = list(first_image.keys())
+            out["image"] = {k: torch.stack([s["image"][k] for s in batch], dim=0) for k in keys}
+        else:
+            # Single-modality plain tensor mode
+            out["image"] = torch.stack([s["image"] for s in batch], dim=0)
 
-        out = {
-            "image": {
-                s2_key: torch.stack(s2_list,  dim=0),
-                s1_key: torch.stack(s1_list,  dim=0),
-            },
-            "mask": torch.stack(mask_list, dim=0),
-        }
         # Only include dates when present (temporal mode)
         if "s2_dates" in batch[0]:
             out["s2_dates"] = torch.stack([s["s2_dates"] for s in batch], dim=0)

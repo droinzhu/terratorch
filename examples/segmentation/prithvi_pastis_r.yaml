@@ -45,6 +45,7 @@ data:
     max_train_samples: 5000
     max_val_samples: 500
     single_frame: true   # squeeze T → (C,H,W) for non-temporal model
+    single_modality: S2  # return plain tensor (not dict) for Prithvi backbone
 
 model:
   class_path: terratorch.tasks.SemanticSegmentationTask
