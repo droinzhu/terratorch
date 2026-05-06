@@ -85,6 +85,7 @@ class PASTISRDataset(Dataset):
         s2_key: str = "S2",
         s1_key: str = "S1",
         max_samples: Optional[int] = None,
+        single_frame: bool = False,
     ):
         """
         Args:
@@ -112,6 +113,7 @@ class PASTISRDataset(Dataset):
         self.augment      = augment
         self.s2_key       = s2_key
         self.s1_key       = s1_key
+        self.single_frame = single_frame  # True → squeeze T dim, output (C,H,W)
 
         # Normalisation arrays: (C,) for broadcasting over (T, C, H, W)
         self._s2_mean = torch.tensor(S2_MEAN, dtype=torch.float32).view(1, NUM_S2_BANDS, 1, 1)
@@ -287,15 +289,24 @@ class PASTISRDataset(Dataset):
         s2_tensor = (s2_tensor - self._s2_mean) / (self._s2_std + 1e-6)
         s1_tensor = (s1_tensor - self._s1_mean) / (self._s1_std + 1e-6)
 
-        sample = {
-            "image": {
-                self.s2_key: s2_tensor,
-                self.s1_key: s1_tensor,
-            },
-            "mask":     mask,
-            "s2_dates": s2_dates,
-            "s1_dates": s1_dates,
-        }
+        # Single-frame mode: squeeze T dim for non-temporal models
+        if self.single_frame:
+            s2_tensor = s2_tensor[0]   # (C, H, W)
+            s1_tensor = s1_tensor[0]   # (C, H, W)
+            sample = {
+                "image": {self.s2_key: s2_tensor, self.s1_key: s1_tensor},
+                "mask": mask,
+            }
+        else:
+            sample = {
+                "image": {
+                    self.s2_key: s2_tensor,
+                    self.s1_key: s1_tensor,
+                },
+                "mask":     mask,
+                "s2_dates": s2_dates,
+                "s1_dates": s1_dates,
+            }
 
         if self.transform is not None:
             sample = self.transform(sample)
@@ -328,6 +339,7 @@ class PASTISRDataModule(pl.LightningDataModule):
         max_val_samples: Optional[int] = None,
         s2_key: str = "S2",
         s1_key: str = "S1",
+        single_frame: bool = False,
     ):
         """
         Args:
@@ -359,6 +371,7 @@ class PASTISRDataModule(pl.LightningDataModule):
         self.max_val_samples  = max_val_samples
         self.s2_key           = s2_key
         self.s1_key           = s1_key
+        self.single_frame     = single_frame
 
         self._train_ds: Optional[Union[PASTISRDataset, Subset]] = None
         self._val_ds:   Optional[Union[PASTISRDataset, Subset]] = None
@@ -377,6 +390,7 @@ class PASTISRDataModule(pl.LightningDataModule):
             use_s1d=self.use_s1d,
             s2_key=self.s2_key,
             s1_key=self.s1_key,
+            single_frame=self.single_frame,
         )
 
         if stage in (None, "fit"):

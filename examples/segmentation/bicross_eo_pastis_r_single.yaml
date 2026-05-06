@@ -1,0 +1,141 @@
+# =============================================================================
+# Ablation ②: BiCross-EO (S2+S1, single frame, NO temporal fusion) on PASTIS-R
+# Key comparison: same model as ③ but without LTAE → isolates temporal value
+# =============================================================================
+seed_everything: 42
+
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 16-mixed
+  logger:
+    class_path: TensorBoardLogger
+    init_args:
+      save_dir: /home/clara/trans/tensorboard/bicross_eo_pastis_r_single
+      name: bicross_eo_pastis_r_single
+      version: v1
+  callbacks:
+    - class_path: RichProgressBar
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val/loss
+        patience: 20
+  max_epochs: 100
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 10
+  enable_checkpointing: false
+  default_root_dir: /home/clara/trans/checkpoint/bicross_eo_pastis_r_single
+
+data:
+  class_path: terratorch.datamodules.PASTISRDataModule
+  init_args:
+    data_root: /home/clara/trans/pastis_r/PASTIS-R
+    batch_size: 4
+    num_workers: 4
+    num_s2_frames: 1
+    num_s1_frames: 1
+    use_s1a: true
+    use_s1d: false
+    image_size: 128
+    max_train_samples: 5000
+    max_val_samples: 500
+    single_frame: true
+
+model:
+  class_path: terratorch.tasks.SemanticSegmentationTask
+  init_args:
+    model_factory: PrithviDofaModelFactory
+    model_args:
+      num_classes: 20
+
+      optical_backbone: prithvi_eo_v2_300
+      optical_out_indices: [5, 11, 17, 23]
+      optical_backbone_kwargs:
+        pretrained: true
+        encoder_only: true
+        num_frames: 1
+        bands:
+          - BLUE
+          - GREEN
+          - RED
+          - RED_EDGE_1
+          - RED_EDGE_2
+          - RED_EDGE_3
+          - NIR_BROAD
+          - NIR_NARROW
+          - SWIR_1
+          - SWIR_2
+
+      optical_peft_config:
+        method: LORA
+        replace_qkv: qkv
+        peft_config_kwargs:
+          r: 32
+          lora_alpha: 64
+          target_modules:
+            - qkv.q_linear
+            - qkv.v_linear
+            - mlp.fc1
+            - mlp.fc2
+          bias: none
+
+      sar_backbone: dofa_large_patch16_224
+      sar_out_indices: [5, 11, 17, 23]
+      sar_backbone_kwargs:
+        pretrained: true
+        model_bands:
+          - VH
+          - VV
+
+      sar_peft_config:
+        method: LORA
+        peft_config_kwargs:
+          r: 16
+          lora_alpha: 32
+          target_modules:
+            - attn.qkv
+            - mlp.fc1
+            - mlp.fc2
+          bias: none
+
+      embed_dim: 1024
+      fusion_heads: 8
+      fusion_dropout: 0.1
+      decoder_channels: [512, 256, 128, 64]
+      skip_dim: 256
+      num_skip_levels: 3
+      use_dofa_skips: true
+      image_size: 128
+      freeze_encoders: false
+      s2_modality_key: S2
+      s1_modality_key: S1
+
+    loss: ce
+    ignore_index: 19
+    freeze_backbone: false
+    freeze_decoder: false
+    plot_on_val: 0
+
+    lr_overrides:
+      fusion: 6.0e-4
+      skip_projs: 6.0e-4
+      decoder_blocks: 6.0e-4
+      seg_head: 6.0e-4
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 6.0e-5
+    weight_decay: 0.05
+
+lr_scheduler:
+  class_path: ReduceLROnPlateau
+  init_args:
+    monitor: val/loss
+    patience: 6
+    factor: 0.5
