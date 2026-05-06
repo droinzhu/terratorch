@@ -136,11 +136,21 @@ class PASTISRDataset(Dataset):
             geojson = json.load(f)
 
         folds_set = set(folds)
-        patch_ids = [
-            feat["properties"]["ID"]
+        # Store per-patch dates for real DOY positional encoding
+        self._patch_dates: Dict[int, Dict[str, List[int]]] = {}
+        all_entries = [
+            feat["properties"]
             for feat in geojson["features"]
             if feat["properties"]["Fold"] in folds_set
         ]
+        patch_ids = [p["ID_PATCH"] for p in all_entries]
+        for p in all_entries:
+            pid = p["ID_PATCH"]
+            self._patch_dates[pid] = {
+                "S2":  list(p.get("dates-S2",  {}).values()),
+                "S1A": list(p.get("dates-S1A", {}).values()),
+                "S1D": list(p.get("dates-S1D", {}).values()),
+            }
 
         # Filter to patches where required files actually exist on disk
         valid_ids = []
@@ -202,17 +212,19 @@ class PASTISRDataset(Dataset):
         return array[indices], indices
 
     @staticmethod
-    def _indices_to_doy(indices: np.ndarray, T_total: int, max_doy: float = 365.0) -> np.ndarray:
-        """
-        Map frame indices [0, T_total) to day-of-year values in [0, max_doy].
-
-        PASTIS-R does not include per-image date metadata in the .npy files.
-        We use a uniform spacing as a placeholder that is consistent across
-        the whole time series.
-        """
-        if T_total <= 1:
-            return np.array([0.0] * len(indices), dtype=np.float32)
-        return (indices / (T_total - 1) * max_doy).astype(np.float32)
+    def _dates_to_doy(dates_yyyymmdd: List[int], indices: np.ndarray) -> np.ndarray:
+        """Convert YYYYMMDD acquisition dates at selected indices to day-of-year [0, 365]."""
+        doys = []
+        for i in indices:
+            yyyymmdd = int(dates_yyyymmdd[i])
+            year  = yyyymmdd // 10000
+            month = (yyyymmdd % 10000) // 100
+            day   = yyyymmdd % 100
+            # Day of year using month offsets
+            month_days = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+            doy = month_days[month - 1] + day - 1  # 0-indexed [0, 364]
+            doys.append(float(doy))
+        return np.array(doys, dtype=np.float32)
 
     # ------------------------------------------------------------------
     # Dataset protocol
@@ -225,26 +237,32 @@ class PASTISRDataset(Dataset):
         pid = self.patch_ids[idx]
 
         # ── Sentinel-2  (T_s2, 10, H, W) ──────────────────────────────
-        s2_raw = np.load(self._s2_path(pid)).astype(np.float32)   # (T, 10, H, W)
+        s2_raw = np.load(self._s2_path(pid)).astype(np.float32)   # int16→float32
         T_s2 = s2_raw.shape[0]
         s2_frames, s2_indices = self._subsample_frames(s2_raw, self.num_s2_frames)
-        s2_doy = self._indices_to_doy(s2_indices, T_s2)
+        s2_dates_meta = self._patch_dates.get(pid, {}).get("S2", [])
+        if len(s2_dates_meta) == T_s2:
+            s2_doy = self._dates_to_doy(s2_dates_meta, s2_indices)
+        else:
+            s2_doy = (s2_indices / max(T_s2 - 1, 1) * 365).astype(np.float32)
 
         # ── Sentinel-1  (T_s1, 3, H, W) per direction ─────────────────
         s1_parts = []
         s1_ref_T = None
         s1_ref_indices = None
+        s1_dates_meta = []
 
         if self.use_s1a:
-            s1a_raw = np.load(self._s1a_path(pid)).astype(np.float32)  # (T, 3, H, W)
+            s1a_raw = np.load(self._s1a_path(pid)).astype(np.float32)  # float16→float32
             T_s1a = s1a_raw.shape[0]
             s1a_frames, s1a_indices = self._subsample_frames(s1a_raw, self.num_s1_frames)
             s1_parts.append(s1a_frames)
             s1_ref_T = T_s1a
             s1_ref_indices = s1a_indices
+            s1_dates_meta = self._patch_dates.get(pid, {}).get("S1A", [])
 
         if self.use_s1d:
-            s1d_raw = np.load(self._s1d_path(pid)).astype(np.float32)  # (T, 3, H, W)
+            s1d_raw = np.load(self._s1d_path(pid)).astype(np.float32)  # float16→float32
             T_s1d = s1d_raw.shape[0]
             # Use the same number of frames; if s1a was loaded use its indices for consistency
             if s1_ref_indices is not None:
@@ -259,11 +277,14 @@ class PASTISRDataset(Dataset):
 
         # Concatenate along channel axis:  (T, 3) + (T, 3) → (T, 6)
         s1_frames = np.concatenate(s1_parts, axis=1)  # (num_s1_frames, C_s1, H, W)
-        s1_doy = self._indices_to_doy(s1_ref_indices, s1_ref_T)
+        if len(s1_dates_meta) == s1_ref_T:
+            s1_doy = self._dates_to_doy(s1_dates_meta, s1_ref_indices)
+        else:
+            s1_doy = (s1_ref_indices / max(s1_ref_T - 1, 1) * 365).astype(np.float32)
 
         # ── Semantic label  (H, W) ─────────────────────────────────────
-        target_raw = np.load(self._ann_path(pid))     # (H, W, 3) uint8
-        label = target_raw[:, :, 0].astype(np.int64)  # semantic channel
+        target_raw = np.load(self._ann_path(pid))     # (3, H, W) uint8  [CHW]
+        label = target_raw[0].astype(np.int64)        # channel 0 = semantic class (0-19)
 
         # Pixels with class==19 are void/ignore; all other values in [0,19] are valid.
 
