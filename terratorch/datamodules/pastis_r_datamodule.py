@@ -484,21 +484,22 @@ class PASTISRDataModule(pl.LightningDataModule):
         s2_key = list(batch[0]["image"].keys())[0]
         s1_key = list(batch[0]["image"].keys())[1]
 
-        s2_list    = [s["image"][s2_key] for s in batch]
-        s1_list    = [s["image"][s1_key] for s in batch]
-        mask_list  = [s["mask"]          for s in batch]
-        s2d_list   = [s["s2_dates"]      for s in batch]
-        s1d_list   = [s["s1_dates"]      for s in batch]
+        s2_list   = [s["image"][s2_key] for s in batch]
+        s1_list   = [s["image"][s1_key] for s in batch]
+        mask_list = [s["mask"]          for s in batch]
 
-        return {
+        out = {
             "image": {
-                s2_key: torch.stack(s2_list,   dim=0),  # (B, T_s2, 10, H, W)
-                s1_key: torch.stack(s1_list,   dim=0),  # (B, T_s1, C_s1, H, W)
+                s2_key: torch.stack(s2_list,  dim=0),
+                s1_key: torch.stack(s1_list,  dim=0),
             },
-            "mask":     torch.stack(mask_list,  dim=0),  # (B, H, W)
-            "s2_dates": torch.stack(s2d_list,   dim=0),  # (B, T_s2)
-            "s1_dates": torch.stack(s1d_list,   dim=0),  # (B, T_s1)
+            "mask": torch.stack(mask_list, dim=0),
         }
+        # Only include dates when present (temporal mode)
+        if "s2_dates" in batch[0]:
+            out["s2_dates"] = torch.stack([s["s2_dates"] for s in batch], dim=0)
+            out["s1_dates"] = torch.stack([s["s1_dates"] for s in batch], dim=0)
+        return out
 
     # ------------------------------------------------------------------
     # DataLoaders
