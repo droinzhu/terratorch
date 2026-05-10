@@ -91,6 +91,7 @@ model:
         model_bands:
           - VH
           - VV
+          - VV-VH
 
       sar_peft_config:
         method: LORA

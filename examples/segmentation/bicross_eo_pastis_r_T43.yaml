@@ -1,8 +1,8 @@
 # =============================================================================
-# TemporalBiCross-EO (Prithvi+DOFA+LTAE) on PASTIS-R Crop Type Segmentation
-# Task: 20-class agricultural parcel semantic segmentation (0=background,
-#       1-18=crop types, 19=void/ignore)
-# Data: PASTIS-R multi-temporal S2 (10 bands) + S1A (3 channels)
+# TemporalBiCross-EO (Prithvi+DOFA+LTAE) on PASTIS-R - T=43 Full Sequence
+# S2: 43 frames (full sequence), S1A: 20 frames
+# Gradient checkpointing per-frame to keep VRAM under 5GB at batch=2
+# Monitor val/mIoU for EarlyStopping and LR scheduling
 # =============================================================================
 seed_everything: 42
 
@@ -15,9 +15,9 @@ trainer:
   logger:
     class_path: TensorBoardLogger
     init_args:
-      save_dir: /home/clara/trans/tensorboard/bicross_eo_pastis_r
-      name: bicross_eo_pastis_r
-      version: v2_T10
+      save_dir: /home/clara/trans/tensorboard/bicross_eo_pastis_r_T43
+      name: bicross_eo_pastis_r_T43
+      version: v3_T43
   callbacks:
     - class_path: RichProgressBar
     - class_path: LearningRateMonitor
@@ -25,13 +25,14 @@ trainer:
         logging_interval: epoch
     - class_path: EarlyStopping
       init_args:
-        monitor: val/loss
-        patience: 20
-  max_epochs: 100
+        monitor: val/mIoU
+        patience: 25
+        mode: max
+  max_epochs: 150
   check_val_every_n_epoch: 1
   log_every_n_steps: 10
   enable_checkpointing: false
-  default_root_dir: /home/clara/trans/checkpoint/bicross_eo_pastis_r
+  default_root_dir: /home/clara/trans/checkpoint/bicross_eo_pastis_r_T43
 
 data:
   class_path: terratorch.datamodules.PASTISRDataModule
@@ -39,8 +40,8 @@ data:
     data_root: /home/clara/trans/pastis_r/PASTIS-R
     batch_size: 2
     num_workers: 4
-    num_s2_frames: 10
-    num_s1_frames: 10
+    num_s2_frames: 43
+    num_s1_frames: 20
     use_s1a: true
     use_s1d: false
     image_size: 128
@@ -146,6 +147,7 @@ optimizer:
 lr_scheduler:
   class_path: ReduceLROnPlateau
   init_args:
-    monitor: val/loss
-    patience: 6
+    monitor: val/mIoU
+    patience: 8
     factor: 0.5
+    mode: max

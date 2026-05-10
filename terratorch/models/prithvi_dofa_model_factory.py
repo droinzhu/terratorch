@@ -694,6 +694,8 @@ class TemporalBiCrossModel(Model):
     ) -> List[torch.Tensor]:
         """
         Encode a temporal batch of frames through the given encoder.
+        Uses per-frame gradient checkpointing to reduce peak VRAM from O(B*T)
+        to O(B), enabling larger T on memory-constrained GPUs.
 
         Args:
             encoder:    Backbone that returns a list of token tensors.
@@ -703,18 +705,30 @@ class TemporalBiCrossModel(Model):
         Returns:
             List of (B, T, N, D) tensors, one per requested output index.
         """
+        from torch.utils.checkpoint import checkpoint as ckpt
         B, T, C, H, W = frames.shape
-        # Merge batch and temporal dimensions
-        frames_flat = frames.reshape(B * T, C, H, W)
-        feats: List[torch.Tensor] = encoder(frames_flat)  # list of (B*T, N[+1], D)
 
+        # Encode frame-by-frame with gradient checkpointing
+        # Each call only holds activations for one frame at a time
+        per_frame: List[List[torch.Tensor]] = []
+        for t in range(T):
+            frame_t = frames[:, t]  # (B, C, H, W)
+            # use_reentrant=False avoids issues with non-Tensor inputs
+            feats_t = ckpt(encoder, frame_t, use_reentrant=True)
+            per_frame.append(feats_t)
+
+        # per_frame: T × [num_scales × (B, N[+1], D)]
+        num_scales = len(per_frame[0])
         out_feats = []
-        for f in feats:
-            if remove_cls:
-                f = _remove_cls(f)           # (B*T, N, D)
-            BT, N, D = f.shape
-            f = f.view(B, T, N, D)
-            out_feats.append(f)
+        for s in range(num_scales):
+            scale_frames = []
+            for t in range(T):
+                f = per_frame[t][s]      # (B, N[+1], D)
+                if remove_cls:
+                    f = _remove_cls(f)   # (B, N, D)
+                scale_frames.append(f)
+            # Stack along time: (B, T, N, D)
+            out_feats.append(torch.stack(scale_frames, dim=1))
 
         return out_feats  # list of (B, T, N, D)
 
